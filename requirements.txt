@@ -4,3 +4,5 @@ numpy==1.26.4
 requests==2.31.0
 rich==13.7.1
 huggingface_hub>=0.22.0
+google-auth>=2.28.0
+google-api-python-client>=2.120.0

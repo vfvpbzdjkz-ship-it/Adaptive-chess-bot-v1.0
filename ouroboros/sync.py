@@ -1,15 +1,20 @@
-"""Push/pull learning artifacts to Hugging Face Hub.
+"""Push/pull learning artifacts to a remote store.
+
+Supported backends (first one configured wins):
+  1. Google Drive  — set GDRIVE_KEY + GDRIVE_FOLDER_ID
+  2. Hugging Face  — set HF_TOKEN + HF_REPO
 
 Synced:  best.pt, latest.pt, ckpt_*.pt, ouroboros.db
 Skipped: replay buffer (large, regenerates fast), config.json (contains token)
 
-Set HF_TOKEN and HF_REPO env vars (or config keys) to enable.
-HF_REPO format: "username/repo-name"  e.g. "alice/ouroboros-brain"
+Size reality check:
+  small-profile best.pt ≈ 10 MB   medium ≈ 60 MB   large ≈ 380 MB
+  ouroboros.db           < 100 MB
+  All artifacts combined < 1 GB — Google Drive 15 GB free tier is ample.
 """
 import logging
 import os
 import threading
-import time
 from pathlib import Path
 from typing import Optional
 
@@ -17,94 +22,109 @@ log = logging.getLogger(__name__)
 
 _SYNC_LOCK = threading.Lock()
 
+# ── Backend detection ──────────────────────────────────────────────────────────
 
-def _get_credentials(cfg: dict) -> tuple[Optional[str], Optional[str]]:
-    token = os.environ.get("HF_TOKEN") or cfg.get("hf_token", "")
-    repo = os.environ.get("HF_REPO") or cfg.get("hf_repo", "")
+def _backend() -> str:
+    """Return 'gdrive', 'hf', or 'none'."""
+    if os.environ.get("GDRIVE_KEY") and os.environ.get("GDRIVE_FOLDER_ID"):
+        return "gdrive"
+    if os.environ.get("HF_TOKEN") and os.environ.get("HF_REPO"):
+        return "hf"
+    return "none"
+
+
+def is_enabled(cfg: dict = None) -> bool:
+    return _backend() != "none"
+
+
+# ── HF helpers ─────────────────────────────────────────────────────────────────
+
+def _hf_credentials(cfg: dict) -> tuple[Optional[str], Optional[str]]:
+    token = os.environ.get("HF_TOKEN") or (cfg or {}).get("hf_token", "")
+    repo  = os.environ.get("HF_REPO")  or (cfg or {}).get("hf_repo", "")
     return token or None, repo or None
 
 
-def is_enabled(cfg: dict) -> bool:
-    token, repo = _get_credentials(cfg)
-    return bool(token and repo)
-
-
-def _api(token: str):
+def _hf_api(token: str):
     from huggingface_hub import HfApi
     return HfApi(token=token)
 
 
-def ensure_repo(cfg: dict) -> bool:
-    """Create the HF repo if it doesn't exist yet. Returns True on success."""
-    token, repo = _get_credentials(cfg)
+def _hf_ensure_repo(cfg: dict) -> bool:
+    token, repo = _hf_credentials(cfg)
     if not token or not repo:
         return False
     try:
-        api = _api(token)
-        api.create_repo(repo_id=repo, private=True, exist_ok=True, repo_type="model")
-        log.info("HF repo ready: %s", repo)
+        _hf_api(token).create_repo(repo_id=repo, private=True,
+                                    exist_ok=True, repo_type="model")
         return True
     except Exception as e:
         log.warning("Could not create HF repo: %s", e)
         return False
 
 
-def push(cfg: dict, paths: list[Path], commit_message: str = "checkpoint") -> bool:
-    """Upload files to HF Hub. paths are local paths under data/."""
-    token, repo = _get_credentials(cfg)
+def _hf_push(cfg: dict, paths: list[Path], message: str) -> bool:
+    token, repo = _hf_credentials(cfg)
     if not token or not repo:
         return False
-    with _SYNC_LOCK:
-        try:
-            api = _api(token)
-            for path in paths:
-                if not path.exists():
-                    continue
-                path_in_repo = str(path)   # preserves data/models/best.pt etc.
-                api.upload_file(
-                    path_or_fileobj=str(path),
-                    path_in_repo=path_in_repo,
-                    repo_id=repo,
-                    repo_type="model",
-                    commit_message=commit_message,
-                )
-                log.info("Pushed %s → %s/%s", path, repo, path_in_repo)
-            return True
-        except Exception as e:
-            log.warning("HF push failed: %s", e)
-            return False
+    try:
+        api = _hf_api(token)
+        for p in paths:
+            if not p.exists():
+                continue
+            api.upload_file(path_or_fileobj=str(p), path_in_repo=str(p),
+                            repo_id=repo, repo_type="model",
+                            commit_message=message)
+            log.info("HF push: %s", p)
+        return True
+    except Exception as e:
+        log.warning("HF push failed: %s", e)
+        return False
 
 
-def pull(cfg: dict, paths: list[str]) -> bool:
-    """Download files from HF Hub into their local paths."""
-    token, repo = _get_credentials(cfg)
+def _hf_pull(cfg: dict, remote_paths: list[str]) -> bool:
+    token, repo = _hf_credentials(cfg)
     if not token or not repo:
         return False
-    with _SYNC_LOCK:
-        try:
-            from huggingface_hub import hf_hub_download
-            for path_in_repo in paths:
-                local_path = Path(path_in_repo)
-                local_path.parent.mkdir(parents=True, exist_ok=True)
-                try:
-                    downloaded = hf_hub_download(
-                        repo_id=repo,
-                        filename=path_in_repo,
-                        repo_type="model",
-                        token=token,
-                        local_dir=".",
-                        local_dir_use_symlinks=False,
-                    )
-                    log.info("Pulled %s/%s → %s", repo, path_in_repo, downloaded)
-                except Exception as e:
-                    log.debug("Could not pull %s: %s", path_in_repo, e)
-            return True
-        except Exception as e:
-            log.warning("HF pull failed: %s", e)
-            return False
+    try:
+        from huggingface_hub import hf_hub_download
+        for rp in remote_paths:
+            local = Path(rp)
+            local.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                hf_hub_download(repo_id=repo, filename=rp, repo_type="model",
+                                token=token, local_dir=".",
+                                local_dir_use_symlinks=False)
+                log.info("HF pull: %s", rp)
+            except Exception as e:
+                log.debug("HF pull skip %s: %s", rp, e)
+        return True
+    except Exception as e:
+        log.warning("HF pull failed: %s", e)
+        return False
 
 
-# ── Convenience wrappers ───────────────────────────────────────────────────────
+# ── GDrive helpers ─────────────────────────────────────────────────────────────
+
+def _gdrive_push(paths: list[Path], message: str) -> bool:
+    from ouroboros.sync_gdrive import push as gd_push
+    ok = True
+    for p in paths:
+        if p.exists():
+            ok = gd_push(p) and ok
+    return ok
+
+
+def _gdrive_pull(remote_paths: list[str]) -> bool:
+    from ouroboros.sync_gdrive import pull as gd_pull
+    ok = True
+    for rp in remote_paths:
+        # remote name = just the filename; local path = full relative path
+        ok = gd_pull(Path(rp).name, Path(rp)) and ok
+    return ok
+
+
+# ── Public API ─────────────────────────────────────────────────────────────────
 
 _CORE_ARTIFACTS = [
     "data/models/best.pt",
@@ -113,47 +133,67 @@ _CORE_ARTIFACTS = [
 ]
 
 
-def pull_latest(cfg: dict) -> None:
-    """Pull best.pt, latest.pt, and ouroboros.db on startup."""
-    if not is_enabled(cfg):
+def ensure_repo(cfg: dict) -> bool:
+    b = _backend()
+    if b == "hf":
+        return _hf_ensure_repo(cfg)
+    return b == "gdrive"   # GDrive folder must be pre-created by the user
+
+
+def pull_latest(cfg: dict = None) -> None:
+    """Pull core artifacts on startup (no-op if no backend configured)."""
+    b = _backend()
+    if b == "none":
         return
-    log.info("Pulling latest artifacts from HF Hub...")
-    pull(cfg, _CORE_ARTIFACTS)
+    log.info("Pulling latest artifacts via %s...", b)
+    if b == "gdrive":
+        _gdrive_pull(_CORE_ARTIFACTS)
+    else:
+        _hf_pull(cfg or {}, _CORE_ARTIFACTS)
 
 
 def push_checkpoint(cfg: dict, step: int) -> None:
     """Push model weights after a checkpoint save."""
-    if not is_enabled(cfg):
+    b = _backend()
+    if b == "none":
         return
-    paths = [
-        Path("data/models/best.pt"),
-        Path("data/models/latest.pt"),
-        Path(f"data/models/ckpt_{step}.pt"),
-    ]
-    push(cfg, [p for p in paths if p.exists()],
-         commit_message=f"checkpoint step {step}")
-
-
-def push_db(cfg: dict) -> None:
-    """Push the database (opponent profiles + game history)."""
-    if not is_enabled(cfg):
-        return
-    push(cfg, [Path("data/ouroboros.db")], commit_message="db update")
+    paths = [Path("data/models/best.pt"), Path("data/models/latest.pt"),
+             Path(f"data/models/ckpt_{step}.pt")]
+    msg = f"checkpoint step {step}"
+    if b == "gdrive":
+        _gdrive_push([p for p in paths if p.exists()], msg)
+    else:
+        _hf_push(cfg, [p for p in paths if p.exists()], msg)
 
 
 def push_promotion(cfg: dict, step: int) -> None:
     """Push after a ladder promotion (new best.pt)."""
-    if not is_enabled(cfg):
+    b = _backend()
+    if b == "none":
         return
-    push(cfg, [Path("data/models/best.pt")],
-         commit_message=f"promoted best at step {step}")
+    paths = [Path("data/models/best.pt")]
+    msg = f"promoted best at step {step}"
+    if b == "gdrive":
+        _gdrive_push(paths, msg)
+    else:
+        _hf_push(cfg, paths, msg)
+
+
+def push_db(cfg: dict = None) -> None:
+    """Push the DB (opponent profiles + game history)."""
+    b = _backend()
+    if b == "none":
+        return
+    paths = [Path("data/ouroboros.db")]
+    if b == "gdrive":
+        _gdrive_push(paths, "db update")
+    else:
+        _hf_push(cfg or {}, paths, "db update")
 
 
 # ── Background periodic DB sync ────────────────────────────────────────────────
 
 class PeriodicSync:
-    """Pushes the DB every N minutes in the background."""
-
     def __init__(self, cfg: dict, interval_minutes: float = 15):
         self.cfg = cfg
         self.interval = interval_minutes * 60
@@ -166,7 +206,8 @@ class PeriodicSync:
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
-        log.info("Periodic HF sync started (every %.0f min)", self.interval / 60)
+        log.info("Periodic sync started via %s (every %.0f min)",
+                 _backend(), self.interval / 60)
 
     def stop(self) -> None:
         self._stop.set()
