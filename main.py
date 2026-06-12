@@ -26,12 +26,18 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _setup() -> dict:
-    """Run wizard if needed; return loaded config."""
+    """Run wizard (interactive) or cloud setup (env vars), then return config."""
     from ouroboros import config as cfg_mod
-    if not cfg_mod.is_configured():
-        from ouroboros.wizard import run_wizard
-        return run_wizard()
-    return cfg_mod.load()
+    if cfg_mod.is_configured():
+        return cfg_mod.load()
+    # Cloud / headless: LICHESS_TOKEN env var present → no interactive input needed
+    from ouroboros.cloud_setup import is_cloud_mode
+    if is_cloud_mode():
+        from ouroboros.cloud_setup import run_cloud_setup
+        return run_cloud_setup()
+    # Local: interactive wizard
+    from ouroboros.wizard import run_wizard
+    return run_wizard()
 
 
 def _load_net(cfg: dict):
