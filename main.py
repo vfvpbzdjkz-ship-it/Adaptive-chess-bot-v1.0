@@ -1,0 +1,278 @@
+"""OUROBOROS entry point. Wizard → mode dispatch."""
+import argparse
+import logging
+import os
+import signal
+import sys
+import threading
+import time
+from pathlib import Path
+
+# Ensure project root is in sys.path when run directly
+sys.path.insert(0, str(Path(__file__).parent))
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="OUROBOROS self-learning Lichess bot")
+    parser.add_argument(
+        "mode",
+        nargs="?",
+        choices=["auto", "play", "train"],
+        default=None,
+        help="Run mode (overrides config). Default: auto",
+    )
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    return parser.parse_args()
+
+
+def _setup() -> dict:
+    """Run wizard if needed; return loaded config."""
+    from ouroboros import config as cfg_mod
+    if not cfg_mod.is_configured():
+        from ouroboros.wizard import run_wizard
+        return run_wizard()
+    return cfg_mod.load()
+
+
+def _load_net(cfg: dict):
+    """Load best.pt (or latest.pt) into a network ready for inference."""
+    from ouroboros.engine.network import build_net, load_checkpoint, best_path, latest_path
+    device = cfg.get("device", "cpu")
+    net = build_net(cfg, device)
+    bp = best_path()
+    lp = latest_path()
+    if bp.exists():
+        load_checkpoint(net, bp, device)
+        logging.getLogger(__name__).info("Loaded best.pt")
+    elif lp.exists():
+        load_checkpoint(net, lp, device)
+        logging.getLogger(__name__).info("Loaded latest.pt (no best.pt yet)")
+    else:
+        logging.getLogger(__name__).warning("No checkpoint found; using random weights")
+    net.eval()
+    return net, device
+
+
+def run_auto(cfg: dict) -> None:
+    """Auto mode: Lichess + background self-play + training."""
+    from ouroboros.lichess.client import LichessClient
+    from ouroboros.lichess.events import EventLoop
+    from ouroboros.lichess.matchmaker import Matchmaker
+    from ouroboros.learning.buffer import ReplayBuffer
+    from ouroboros.learning.selfplay import SelfPlayManager
+    from ouroboros.learning.trainer import Trainer
+    from ouroboros.learning.online import process_finished_game
+    from ouroboros.persistence import meta_get
+    from ouroboros import status as st
+
+    log = logging.getLogger(__name__)
+
+    net, device = _load_net(cfg)
+    client = LichessClient(cfg["lichess_token"])
+    buffer = ReplayBuffer(capacity=cfg.get("buffer_capacity", 1_000_000))
+    trainer = Trainer(net, buffer, cfg, device)
+    sp_manager = SelfPlayManager(cfg, buffer)
+    matchmaker = Matchmaker(client, cfg)
+
+    # Status updates
+    elo = float(meta_get("ladder_elo", "1500"))
+    st.update(
+        mode="auto",
+        buffer_cap=cfg.get("buffer_capacity", 1_000_000),
+        ladder_elo=elo,
+    )
+    st.start(interval=30)
+
+    def on_game_start(game_id: str) -> None:
+        log.info("Game started: %s — throttling self-play", game_id)
+        sp_manager.throttle(True)
+        st.update(live_game=game_id)
+
+    def on_game_finish(game_id: str, result, opp_username, opp_elo, opp_is_bot) -> None:
+        log.info("Game %s finished: %s vs %s", game_id, result, opp_username)
+        sp_manager.throttle(False)
+        st.update(live_game=None, lichess_games=st._state.get("lichess_games", 0) + 1)
+        # Note: online.py is called from game.py pipeline via events;
+        # here we handle PGN retrieval for full processing
+        _fetch_and_process_game(client, buffer, game_id, result, opp_username, opp_elo, opp_is_bot, cfg)
+
+    def _update_status(steps: int, loss: float) -> None:
+        st.update(
+            train_steps=steps,
+            last_loss=loss,
+            buffer_fill=buffer.count,
+            selfplay_games=sp_manager.total_games,
+            checkpoint=f"ckpt_{trainer.train_step_count}",
+        )
+
+    # Start everything
+    sp_manager.start()
+    trainer.start_background(status_fn=_update_status)
+    matchmaker.start()
+
+    event_loop = EventLoop(
+        client, net, device, cfg,
+        on_game_start=on_game_start,
+        on_game_finish=on_game_finish,
+    )
+
+    def _on_signal(sig, frame):
+        log.info("Shutdown signal received; stopping...")
+        event_loop.stop()
+        matchmaker.stop()
+        trainer.stop()
+        sp_manager.stop()
+        buffer.flush()
+        st.stop()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, _on_signal)
+    signal.signal(signal.SIGTERM, _on_signal)
+
+    log.info("Auto mode running. Press Ctrl+C to stop.")
+    event_loop.run()
+
+
+def run_play(cfg: dict) -> None:
+    """Play mode: Lichess only, no training."""
+    from ouroboros.lichess.client import LichessClient
+    from ouroboros.lichess.events import EventLoop
+    from ouroboros import status as st
+    from ouroboros.persistence import meta_get
+
+    log = logging.getLogger(__name__)
+    net, device = _load_net(cfg)
+    client = LichessClient(cfg["lichess_token"])
+
+    elo = float(meta_get("ladder_elo", "1500"))
+    st.update(mode="play", ladder_elo=elo)
+    st.start()
+
+    event_loop = EventLoop(client, net, device, cfg)
+
+    def _on_signal(sig, frame):
+        event_loop.stop()
+        st.stop()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, _on_signal)
+    signal.signal(signal.SIGTERM, _on_signal)
+
+    log.info("Play mode running.")
+    event_loop.run()
+
+
+def run_train(cfg: dict) -> None:
+    """Train mode: pure offline self-play + training, no network needed."""
+    from ouroboros.learning.buffer import ReplayBuffer
+    from ouroboros.learning.selfplay import SelfPlayManager
+    from ouroboros.learning.trainer import Trainer
+    from ouroboros import status as st
+    from ouroboros.persistence import meta_get
+    from ouroboros.engine.network import build_net, load_checkpoint, latest_path
+
+    log = logging.getLogger(__name__)
+
+    device = cfg.get("device", "cpu")
+    net = build_net(cfg, device)
+    lp = latest_path()
+    if lp.exists():
+        load_checkpoint(net, lp, device)
+
+    buffer = ReplayBuffer(capacity=cfg.get("buffer_capacity", 1_000_000))
+    trainer = Trainer(net, buffer, cfg, device)
+    sp_manager = SelfPlayManager(cfg, buffer)
+
+    elo = float(meta_get("ladder_elo", "1500"))
+    st.update(mode="train", buffer_cap=cfg.get("buffer_capacity", 1_000_000), ladder_elo=elo)
+    st.start()
+
+    def _update_status(steps: int, loss: float) -> None:
+        st.update(
+            train_steps=steps,
+            last_loss=loss,
+            buffer_fill=buffer.count,
+            selfplay_games=sp_manager.total_games,
+        )
+
+    sp_manager.start()
+    trainer.start_background(status_fn=_update_status)
+
+    def _on_signal(sig, frame):
+        log.info("Stopping training...")
+        trainer.stop()
+        sp_manager.stop()
+        buffer.flush()
+        st.stop()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, _on_signal)
+    signal.signal(signal.SIGTERM, _on_signal)
+
+    log.info("Train mode running. Press Ctrl+C to stop.")
+    while True:
+        time.sleep(60)
+
+
+def _fetch_and_process_game(
+    client, buffer, game_id: str, result, opp_username, opp_elo, opp_is_bot, cfg
+) -> None:
+    """Fetch completed game PGN from Lichess and process it."""
+    import logging
+    log = logging.getLogger(__name__)
+    try:
+        import requests
+        resp = requests.get(
+            f"https://lichess.org/game/export/{game_id}",
+            headers={
+                "Authorization": f"Bearer {cfg['lichess_token']}",
+                "Accept": "application/x-chess-pgn",
+            },
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            pgn = resp.text
+            our_color = "white"  # We determine color from game record; simplified here
+            from ouroboros.learning.online import process_finished_game
+            process_finished_game(
+                buffer=buffer,
+                game_id=game_id,
+                pgn=pgn,
+                our_color=our_color,
+                result=result or "draw",
+                opponent_username=opp_username,
+                opponent_elo=opp_elo,
+                opponent_is_bot=opp_is_bot,
+            )
+    except Exception as e:
+        log.warning("Could not fetch/process game %s: %s", game_id, e)
+
+
+def main() -> None:
+    args = _parse_args()
+
+    # Setup logging before anything else
+    from ouroboros.logging_setup import setup_logging
+    import logging as _logging
+    setup_logging(level=_logging.DEBUG if args.debug else _logging.INFO)
+    log = _logging.getLogger(__name__)
+
+    # Ensure data directories exist
+    for d in ["data", "data/models", "data/buffer", "data/logs"]:
+        Path(d).mkdir(parents=True, exist_ok=True)
+
+    cfg = _setup()
+
+    mode = args.mode or cfg.get("mode", "auto")
+    log.info("Starting OUROBOROS in mode: %s", mode)
+
+    if mode == "train":
+        run_train(cfg)
+    elif mode == "play":
+        run_play(cfg)
+    else:
+        run_auto(cfg)
+
+
+if __name__ == "__main__":
+    main()

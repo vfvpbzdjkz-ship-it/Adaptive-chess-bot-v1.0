@@ -1,0 +1,5 @@
+torch>=2.2.0
+chess==1.10.0
+numpy==1.26.4
+requests==2.31.0
+rich==13.7.1
