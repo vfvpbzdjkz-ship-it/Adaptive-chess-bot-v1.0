@@ -70,8 +70,12 @@ def run_auto(cfg: dict) -> None:
     from ouroboros.learning.online import process_finished_game
     from ouroboros.persistence import meta_get
     from ouroboros import status as st
+    from ouroboros.sync import pull_latest, PeriodicSync
 
     log = logging.getLogger(__name__)
+
+    # Pull latest weights + DB from HF Hub before loading (no-op if not configured)
+    pull_latest(cfg)
 
     net, device = _load_net(cfg)
     client = LichessClient(cfg["lichess_token"])
@@ -115,6 +119,8 @@ def run_auto(cfg: dict) -> None:
     sp_manager.start()
     trainer.start_background(status_fn=_update_status)
     matchmaker.start()
+    periodic_sync = PeriodicSync(cfg, interval_minutes=15)
+    periodic_sync.start()
 
     event_loop = EventLoop(
         client, net, device, cfg,
@@ -128,6 +134,7 @@ def run_auto(cfg: dict) -> None:
         matchmaker.stop()
         trainer.stop()
         sp_manager.stop()
+        periodic_sync.stop()
         buffer.flush()
         st.stop()
         sys.exit(0)

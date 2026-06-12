@@ -3,3 +3,4 @@ chess==1.10.0
 numpy==1.26.4
 requests==2.31.0
 rich==13.7.1
+huggingface_hub>=0.22.0

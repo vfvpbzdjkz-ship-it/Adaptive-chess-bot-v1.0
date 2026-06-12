@@ -54,6 +54,9 @@ DEFAULTS: dict[str, Any] = {
     "determinism_threshold": 0.7,
     # Book-speed cutoff confidence
     "book_speed_confidence": 0.5,
+    # Hugging Face Hub sync (optional — env vars HF_TOKEN / HF_REPO take priority)
+    "hf_token": "",
+    "hf_repo": "",
 }
 
 _PROFILE_SPECS = {

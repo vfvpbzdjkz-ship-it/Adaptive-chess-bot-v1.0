@@ -169,6 +169,9 @@ class Trainer:
             save_checkpoint(self.net, bp, {"step": self.step})
             log.info("Promoted latest → best.pt")
             self._record_elo(wins, draws, losses, n)
+            # Push new best to HF Hub if configured
+            from ouroboros.sync import push_promotion
+            push_promotion(self.cfg, self.step)
         else:
             log.info("Latest did not beat best (%.0f%% < %.0f%%)", score * 100, self.promo_threshold * 100)
 
