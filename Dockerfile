@@ -8,9 +8,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt .
 
-# CPU-only torch is much smaller (~250MB vs 2GB+)
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
-    && pip install --no-cache-dir chess numpy requests rich
+# Install CPU-only torch first (avoids pulling the 2GB CUDA build from PyPI)
+RUN pip install --no-cache-dir "torch==2.2.2" \
+    --index-url https://download.pytorch.org/whl/cpu
+
+# Install everything else (torch already satisfied above, pip skips it)
+RUN pip install --no-cache-dir \
+    "chess==1.10.0" \
+    "numpy==1.26.4" \
+    "requests==2.31.0" \
+    "rich==13.7.1" \
+    "huggingface_hub>=0.22.0" \
+    "google-auth>=2.28.0" \
+    "google-api-python-client>=2.120.0"
 
 COPY . .
 
@@ -19,7 +29,6 @@ RUN mkdir -p data/models data/buffer data/logs
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
-# data/ is mounted as a persistent volume in Railway
 VOLUME ["/app/data"]
 
 CMD ["python", "main.py"]
