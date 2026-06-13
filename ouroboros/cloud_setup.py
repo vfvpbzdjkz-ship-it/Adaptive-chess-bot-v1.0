@@ -40,6 +40,13 @@ def _validate_token(token: str) -> dict:
         headers={"Authorization": f"Bearer {token}"},
         timeout=15,
     )
+    if resp.status_code == 401:
+        raise RuntimeError(
+            "LICHESS_TOKEN is invalid or expired (got 401).\n"
+            "Go to Railway → Variables → update LICHESS_TOKEN with a fresh token from:\n"
+            "  https://lichess.org/account/oauth/token/create\n"
+            "Required scopes: bot:play  challenge:read  challenge:write"
+        )
     resp.raise_for_status()
     return resp.json()
 
