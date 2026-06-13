@@ -47,7 +47,7 @@ _HTML = b"""<!DOCTYPE html>
          padding:28px 16px;gap:0}
     h1{color:#c89b3c;font-size:2rem;letter-spacing:3px;margin-bottom:4px}
     #sub{color:#666;font-size:.85rem;margin-bottom:18px}
-    #wrap{width:600px;max-width:100%}
+    #wrap{width:820px;max-width:96%}
     #badge-row{min-height:24px;margin-bottom:6px;display:flex;align-items:center;gap:8px}
     .badge{display:inline-block;padding:3px 11px;border-radius:12px;
            font-size:.73rem;font-weight:700;letter-spacing:1px}
@@ -68,7 +68,8 @@ _HTML = b"""<!DOCTYPE html>
     #links{margin-top:9px;display:flex;gap:14px;font-size:.82rem;
            align-items:center;flex-wrap:wrap;min-height:22px}
     #footer{margin-top:22px;text-align:center;font-size:.83rem;
-            color:#888;display:flex;flex-direction:column;gap:5px}
+            color:#888;display:flex;flex-direction:column;gap:5px;
+            width:820px;max-width:96%}
     #record{color:#bbb;font-size:.85rem}
     .rw{color:#6fcf6f}.rl{color:#cf6f6f}.rd{color:#aaa}
     #countdown{color:#c89b3c;font-weight:600;font-size:.95rem}
@@ -124,7 +125,7 @@ _HTML = b"""<!DOCTYPE html>
       var url = 'https://lichess.org/embed/game/' + id + '?theme=brown&bg=dark';
       if (!isLive) url += '#last';
       document.getElementById('board').innerHTML =
-        '<iframe src="' + url + '" height="397" allowtransparency="true"></iframe>';
+        '<iframe src="' + url + '" height="600" allowtransparency="true"></iframe>';
     }
 
     function showIdle() {
