@@ -10,6 +10,47 @@ from ouroboros.engine.network import OuroborosNet
 log = logging.getLogger(__name__)
 
 
+def _check_revenge(opp_username: str) -> bool:
+    """Return True if the opponent has beaten us more than we've beaten them."""
+    try:
+        from ouroboros.persistence import get_db
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT wins_vs_us, losses_vs_us FROM opponents WHERE username=?",
+                (opp_username,),
+            ).fetchone()
+            if row:
+                # wins_vs_us = opponent's wins against us (our losses)
+                # losses_vs_us = opponent's losses against us (our wins)
+                return int(row["wins_vs_us"]) > int(row["losses_vs_us"])
+    except Exception:
+        pass
+    return False
+
+
+def _push_record_to_viewer() -> None:
+    """Query cumulative results from the DB and push them to the web viewer."""
+    try:
+        from ouroboros.persistence import get_db
+        from ouroboros.web_viewer import update_record
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT "
+                "SUM(CASE WHEN result='win'  THEN 1 ELSE 0 END) AS wins, "
+                "SUM(CASE WHEN result='loss' THEN 1 ELSE 0 END) AS losses, "
+                "SUM(CASE WHEN result='draw' THEN 1 ELSE 0 END) AS draws "
+                "FROM games",
+            ).fetchone()
+            if row:
+                update_record(
+                    int(row["wins"]   or 0),
+                    int(row["losses"] or 0),
+                    int(row["draws"]  or 0),
+                )
+    except Exception:
+        pass
+
+
 def _should_accept(challenge: dict, cfg: dict) -> tuple[bool, str]:
     variant = challenge.get("variant", {}).get("key", "")
     if variant != "standard":
@@ -146,7 +187,17 @@ class EventLoop:
 
             opp_id = get_or_create_opponent(opp_username, opp_is_bot, opp_title, opp_elo)
 
+            # Check if this is a revenge match (opponent has beaten us more than we've beaten them)
+            is_revenge = _check_revenge(opp_username)
+
             context = build_context(opp_username, opp_is_bot, opp_elo, self.cfg)
+
+            # Push matchup details to the web viewer
+            try:
+                from ouroboros.web_viewer import update_game_details
+                update_game_details(game_id, opp_username, color, is_revenge)
+            except Exception:
+                pass
 
             antibot = None
             if opp_is_bot:
@@ -168,6 +219,9 @@ class EventLoop:
 
             if self.on_game_finish:
                 self.on_game_finish(game_id, result, opp_username, opp_elo, opp_is_bot)
+
+            # Refresh win/loss/draw totals in the web viewer
+            _push_record_to_viewer()
 
         except Exception as e:
             log.exception("Error in game %s: %s", game_id, e)

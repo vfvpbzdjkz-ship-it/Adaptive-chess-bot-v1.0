@@ -1,4 +1,4 @@
-"""OUROBOROS entry point. Wizard → mode dispatch."""
+"""OUROBOROS entry point. Wizard -> mode dispatch."""
 import argparse
 import logging
 import os
@@ -30,7 +30,7 @@ def _setup() -> dict:
     from ouroboros import config as cfg_mod
     if cfg_mod.is_configured():
         return cfg_mod.load()
-    # Cloud / headless: LICHESS_TOKEN env var present → no interactive input needed
+    # Cloud / headless: LICHESS_TOKEN env var present -> no interactive input needed
     from ouroboros.cloud_setup import is_cloud_mode
     if is_cloud_mode():
         from ouroboros.cloud_setup import run_cloud_setup
@@ -95,7 +95,7 @@ def run_auto(cfg: dict) -> None:
     st.start(interval=30)
 
     def on_game_start(game_id: str) -> None:
-        log.info("Game started: %s — throttling self-play", game_id)
+        log.info("Game started: %s -- throttling self-play", game_id)
         sp_manager.throttle(True)
         st.update(live_game=game_id)
         update_game(game_id)
@@ -105,8 +105,6 @@ def run_auto(cfg: dict) -> None:
         sp_manager.throttle(False)
         st.update(live_game=None, lichess_games=st._state.get("lichess_games", 0) + 1)
         update_game(None)
-        # Note: online.py is called from game.py pipeline via events;
-        # here we handle PGN retrieval for full processing
         _fetch_and_process_game(client, buffer, game_id, result, opp_username, opp_elo, opp_is_bot, cfg)
 
     def _update_status(steps: int, loss: float) -> None:
@@ -273,19 +271,23 @@ def main() -> None:
     setup_logging(level=_logging.DEBUG if args.debug else _logging.INFO)
     log = _logging.getLogger(__name__)
 
-    # Start the spectator web server immediately — before any setup that might
-    # take time — so Railway health checks pass from the first second.
+    # Start the spectator web server immediately -- before any setup that might
+    # take time -- so Railway health checks pass from the first second.
     _viewer = None
-    if os.environ.get("LICHESS_TOKEN"):
-        from ouroboros.web_viewer import WebViewer
-        _viewer = WebViewer()
-        _viewer.start()
+    if os.environ.get("LICHESS_TOKEN") and os.environ.get("PORT"):
+        try:
+            from ouroboros.web_viewer import WebViewer
+            _viewer = WebViewer()
+            _viewer.start()
+            print(f"Web viewer started on port {_viewer.port}", flush=True)
+        except Exception as exc:
+            print(f"Web viewer could not start: {exc}", flush=True)
 
     # Ensure data directories exist
     for d in ["data", "data/models", "data/buffer", "data/logs"]:
         Path(d).mkdir(parents=True, exist_ok=True)
 
-    # Always init DB on boot — /tmp is wiped on container restart so tables
+    # Always init DB on boot -- /tmp is wiped on container restart so tables
     # must be recreated even when config.json already exists on the volume.
     from ouroboros.persistence import init_db
     init_db()
