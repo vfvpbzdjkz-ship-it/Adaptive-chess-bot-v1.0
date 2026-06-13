@@ -14,6 +14,14 @@ CHALLENGE_INTERVAL = 180  # seconds between challenges (max N/hr enforced)
 MAX_PER_HOUR = 10
 
 
+def _set_next_challenge(ts: float) -> None:
+    try:
+        from ouroboros.web_viewer import update_next_challenge
+        update_next_challenge(ts)
+    except Exception:
+        pass
+
+
 class Matchmaker:
     def __init__(self, client: LichessClient, cfg: dict, on_game_start=None):
         self.client = client
@@ -31,6 +39,7 @@ class Matchmaker:
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
         log.info("Matchmaker started")
+        _set_next_challenge(time.time() + CHALLENGE_INTERVAL)
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -65,6 +74,8 @@ class Matchmaker:
                 self._challenges_this_hour += 1
             except Exception as e:
                 log.debug("Challenge to %s failed: %s", username, e)
+
+            _set_next_challenge(time.time() + CHALLENGE_INTERVAL)
 
     def _pick_target(self) -> Optional[dict]:
         """Pick a bot to challenge. Prefer bots with negative score against us."""
