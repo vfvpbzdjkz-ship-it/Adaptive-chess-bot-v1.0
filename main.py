@@ -274,6 +274,11 @@ def main() -> None:
     for d in ["data", "data/models", "data/buffer", "data/logs"]:
         Path(d).mkdir(parents=True, exist_ok=True)
 
+    # Always init DB on boot — /tmp is wiped on container restart so tables
+    # must be recreated even when config.json already exists on the volume.
+    from ouroboros.persistence import init_db
+    init_db()
+
     cfg = _setup()
 
     mode = args.mode or cfg.get("mode", "auto")
