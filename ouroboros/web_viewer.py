@@ -21,7 +21,7 @@ _HTML = b"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>OUROBOROS — Live</title>
+  <title>OUROBOROS &mdash; Live</title>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
@@ -64,7 +64,7 @@ _HTML = b"""<!DOCTYPE html>
               '<iframe src="https://lichess.org/embed/game/' + cur +
               '?theme=brown&bg=dark" height="397" allowtransparency="true"></iframe>' +
               '<p id="note"><a href="https://lichess.org/' + cur +
-              '" target="_blank">Open full game on Lichess ↗</a></p>';
+              '" target="_blank">Open full game on Lichess &#x2197;</a></p>';
           }
         } else if (!d.game_id && cur !== null) {
           cur = null;

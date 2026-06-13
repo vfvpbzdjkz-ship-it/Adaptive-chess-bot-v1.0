@@ -276,10 +276,14 @@ def main() -> None:
     # Start the spectator web server immediately — before any setup that might
     # take time — so Railway health checks pass from the first second.
     _viewer = None
-    if os.environ.get("LICHESS_TOKEN"):
-        from ouroboros.web_viewer import WebViewer
-        _viewer = WebViewer()
-        _viewer.start()
+    if os.environ.get("LICHESS_TOKEN") and os.environ.get("PORT"):
+        try:
+            from ouroboros.web_viewer import WebViewer
+            _viewer = WebViewer()
+            _viewer.start()
+            print(f"Web viewer started on port {_viewer.port}", flush=True)
+        except Exception as exc:
+            print(f"Web viewer could not start: {exc}", flush=True)
 
     # Ensure data directories exist
     for d in ["data", "data/models", "data/buffer", "data/logs"]:
