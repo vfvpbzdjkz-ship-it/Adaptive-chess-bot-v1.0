@@ -97,15 +97,16 @@ def init_db() -> None:
 
 @contextmanager
 def get_db():
-    conn = sqlite3.connect(str(DB_PATH), timeout=30)
+    # nolock=1: skip POSIX file locking — required for NFS/network volumes
+    # (Railway, and similar) that don't implement fcntl advisory locks.
+    # WAL mode is incompatible with nolock; DELETE (default) is used instead.
+    db_uri = f"file:{DB_PATH.absolute()}?nolock=1"
+    conn = sqlite3.connect(db_uri, uri=True, timeout=30)
     conn.row_factory = sqlite3.Row
     try:
-        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
     except sqlite3.OperationalError:
-        # Network-attached volumes (e.g. Railway) may not support WAL locking;
-        # fall back to the default DELETE journal which works everywhere.
-        conn.execute("PRAGMA journal_mode=DELETE")
-    conn.execute("PRAGMA synchronous=NORMAL")
+        pass
     try:
         yield conn
         conn.commit()
