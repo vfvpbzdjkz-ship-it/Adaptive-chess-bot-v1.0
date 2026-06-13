@@ -1,6 +1,7 @@
 """MCTS with PUCT selection, batched inference, and tree reuse."""
 import logging
 import math
+import time
 from typing import Optional
 
 import chess
@@ -178,6 +179,7 @@ class MCTS:
         root_prior_bias: Optional[np.ndarray] = None,
         excluded_moves: Optional[set] = None,
         forced_tau: Optional[float] = None,
+        deadline: Optional[float] = None,
     ) -> tuple[chess.Move, np.ndarray]:
         """Run MCTS and return (best_move, visit_distribution).
 
@@ -230,6 +232,9 @@ class MCTS:
         batch_size = self.batch_size
         done = 0
         while done < remaining:
+            if deadline is not None and time.time() >= deadline:
+                log.debug("MCTS deadline reached after %d/%d sims", done, remaining)
+                break
             batch: list[tuple[list[Node], chess.Board]] = []
             for _ in range(min(batch_size, remaining - done)):
                 path = self._select(root)
@@ -276,7 +281,8 @@ class MCTS:
             temps /= temps.sum()
             chosen = root.children[np.random.choice(len(root.children), p=temps)]
         else:
-            chosen = max(root.children, key=lambda c: c.n)
+            # Prefer visits, break ties by prior (matters when deadline fires early)
+            chosen = max(root.children, key=lambda c: (c.n, c.p))
 
         # Advance root to chosen child for tree reuse
         chosen.parent = None

@@ -26,9 +26,10 @@ class TimeManager:
         increment_ms: int,
         cap_sims: int,
         book_speed: bool = False,
-    ) -> int:
+    ) -> tuple[int, float]:
+        """Return (n_sims, think_seconds)."""
         if book_speed:
-            return max(1, cap_sims // 16)
+            return max(1, cap_sims // 16), 0.1
 
         remaining_s = remaining_ms / 1000.0
         increment_s = increment_ms / 1000.0
@@ -43,7 +44,7 @@ class TimeManager:
 
         sims = int(think_s * max(self._sims_per_sec, 1.0))
         sims = max(1, min(sims, cap_sims))
-        return sims
+        return sims, think_s
 
 
 class Timer:

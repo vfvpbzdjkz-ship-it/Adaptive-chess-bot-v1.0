@@ -1,4 +1,4 @@
-"""OUROBOROS entry point. Wizard -> mode dispatch."""
+"""OUROBOROS entry point. Wizard → mode dispatch."""
 import argparse
 import logging
 import os
@@ -30,7 +30,7 @@ def _setup() -> dict:
     from ouroboros import config as cfg_mod
     if cfg_mod.is_configured():
         return cfg_mod.load()
-    # Cloud / headless: LICHESS_TOKEN env var present -> no interactive input needed
+    # Cloud / headless: LICHESS_TOKEN env var present → no interactive input needed
     from ouroboros.cloud_setup import is_cloud_mode
     if is_cloud_mode():
         from ouroboros.cloud_setup import run_cloud_setup
@@ -56,6 +56,20 @@ def _load_net(cfg: dict):
     else:
         logging.getLogger(__name__).warning("No checkpoint found; using random weights")
     net.eval()
+
+    # Warm up PyTorch: the first forward pass initialises kernels and can take
+    # many seconds on CPU; doing it now avoids a freeze on the first game move.
+    try:
+        import torch
+        import chess as _chess
+        from ouroboros.engine.encoding import board_to_tensor
+        with torch.inference_mode():
+            dummy = board_to_tensor(_chess.Board()).unsqueeze(0).to(device)
+            net(dummy)
+        logging.getLogger(__name__).info("Network warmup complete")
+    except Exception as _e:
+        logging.getLogger(__name__).debug("Warmup skipped: %s", _e)
+
     return net, device
 
 
@@ -95,7 +109,7 @@ def run_auto(cfg: dict) -> None:
     st.start(interval=30)
 
     def on_game_start(game_id: str) -> None:
-        log.info("Game started: %s -- throttling self-play", game_id)
+        log.info("Game started: %s — throttling self-play", game_id)
         sp_manager.throttle(True)
         st.update(live_game=game_id)
         update_game(game_id)
@@ -105,6 +119,8 @@ def run_auto(cfg: dict) -> None:
         sp_manager.throttle(False)
         st.update(live_game=None, lichess_games=st._state.get("lichess_games", 0) + 1)
         update_game(None)
+        # Note: online.py is called from game.py pipeline via events;
+        # here we handle PGN retrieval for full processing
         _fetch_and_process_game(client, buffer, game_id, result, opp_username, opp_elo, opp_is_bot, cfg)
 
     def _update_status(steps: int, loss: float) -> None:

@@ -19,7 +19,7 @@ log = logging.getLogger(__name__)
 RESIGN_THRESHOLD = -0.95
 RESIGN_CONSECUTIVE = 6
 DRAW_THRESHOLD = 0.05
-# Abort (< 2 moves) or resign (≥ 2 moves) when opponent is silent this long.
+# Abort (< 2 moves) or resign (>= 2 moves) when opponent is silent this long.
 OPPONENT_TIMEOUT_SECONDS = 5 * 60
 
 
@@ -210,15 +210,17 @@ class GameRunner:
 
         if move_override and move_override in board.legal_moves:
             self.client.send_move(self.game_id, move_override.uci())
-            root_val = 0.0
-        else:
-            # Compute sims budget
+            return
+
+        try:
             book_speed = self.context is not None and is_book_speed(self.context, board)
-            sims = self.timeman.budget_sims(
+            sims, think_s = self.timeman.budget_sims(
                 remaining_ms, increment_ms,
                 cap_sims=self.cfg.get("mcts_sims_live", 256),
                 book_speed=book_speed,
             )
+            # Hard wall-clock deadline: 2x think budget, minimum 5 s
+            move_deadline = time.time() + max(think_s * 2.0, 5.0)
 
             # Root prior bias from opponent profile
             root_bias = None
@@ -232,6 +234,7 @@ class GameRunner:
                     root_prior_bias=root_bias,
                     excluded_moves=excluded if excluded else None,
                     forced_tau=forced_tau,
+                    deadline=move_deadline,
                 )
             self.timeman.record(sims, t.elapsed)
 
@@ -265,6 +268,12 @@ class GameRunner:
                 self.antibot.record_our_move(move, root_val)
 
             self._our_move_ucis.append(move.uci())
+
+        except Exception as e:
+            log.error("MCTS error in game %s (%s); playing random legal move", self.game_id, e)
+            import random as _rand
+            fallback = _rand.choice(legal_moves)
+            self.client.send_move(self.game_id, fallback.uci())
 
     def _handle_draw_offer(self, state: dict) -> None:
         if self.mcts._root:
