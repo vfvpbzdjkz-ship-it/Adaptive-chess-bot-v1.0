@@ -71,14 +71,9 @@ def run_auto(cfg: dict) -> None:
     from ouroboros.persistence import meta_get
     from ouroboros import status as st
     from ouroboros.sync import pull_latest, PeriodicSync
-    from ouroboros.web_viewer import WebViewer, update_game, set_username
+    from ouroboros.web_viewer import update_game
 
     log = logging.getLogger(__name__)
-
-    # Start spectator web page immediately so Railway health checks pass
-    viewer = WebViewer()
-    set_username(cfg.get("bot_username", ""))
-    viewer.start()
 
     # Pull latest weights + DB from HF Hub before loading (no-op if not configured)
     pull_latest(cfg)
@@ -143,7 +138,6 @@ def run_auto(cfg: dict) -> None:
         trainer.stop()
         sp_manager.stop()
         periodic_sync.stop()
-        viewer.stop()
         buffer.flush()
         st.stop()
         sys.exit(0)
@@ -279,6 +273,14 @@ def main() -> None:
     setup_logging(level=_logging.DEBUG if args.debug else _logging.INFO)
     log = _logging.getLogger(__name__)
 
+    # Start the spectator web server immediately — before any setup that might
+    # take time — so Railway health checks pass from the first second.
+    _viewer = None
+    if os.environ.get("LICHESS_TOKEN"):
+        from ouroboros.web_viewer import WebViewer
+        _viewer = WebViewer()
+        _viewer.start()
+
     # Ensure data directories exist
     for d in ["data", "data/models", "data/buffer", "data/logs"]:
         Path(d).mkdir(parents=True, exist_ok=True)
@@ -289,6 +291,11 @@ def main() -> None:
     init_db()
 
     cfg = _setup()
+
+    # Update viewer with the bot username once config is loaded
+    if _viewer is not None:
+        from ouroboros.web_viewer import set_username
+        set_username(cfg.get("bot_username", ""))
 
     mode = args.mode or cfg.get("mode", "auto")
     log.info("Starting OUROBOROS in mode: %s", mode)
