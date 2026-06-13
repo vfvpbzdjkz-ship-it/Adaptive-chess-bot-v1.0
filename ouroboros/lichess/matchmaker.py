@@ -10,7 +10,7 @@ from ouroboros.persistence import get_db
 
 log = logging.getLogger(__name__)
 
-CHALLENGE_INTERVAL = 300  # seconds between challenges (max N/hr enforced)
+CHALLENGE_INTERVAL = 180  # seconds between challenges (max N/hr enforced)
 MAX_PER_HOUR = 10
 
 
