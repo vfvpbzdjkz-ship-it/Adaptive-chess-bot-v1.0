@@ -1,10 +1,9 @@
 """Minimal HTTP spectator page -- no external dependencies.
 
 Serves a single HTML page with:
-- Live Lichess game embed (stays visible after game ends)
+- Live chess board rendered from FEN (polls our own API, always current)
 - Player usernames + colors shown during active game
 - Revenge vs random match label
-- Previous-game toggle button when a new game starts
 - Countdown to the next bot challenge
 - Running win/loss/draw record
 
@@ -18,6 +17,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 log = logging.getLogger(__name__)
 
+_STARTING_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+
 _lock = threading.Lock()
 _state: dict = {
     "game_id": None,
@@ -28,6 +29,8 @@ _state: dict = {
     "opponent_username": None,
     "our_color": None,          # "white" or "black"
     "is_revenge": False,
+    # Board position (FEN) -- updated after every move
+    "current_fen": _STARTING_FEN,
     # Cumulative record
     "total_wins": 0,
     "total_losses": 0,
@@ -61,7 +64,16 @@ _HTML = b"""<!DOCTYPE html>
     .uname{max-width:160px;overflow:hidden;text-overflow:ellipsis;
            white-space:nowrap;font-weight:600;color:#e0e0e0}
     .vs{color:#555;font-size:.75rem;padding:0 4px}
-    #board iframe{width:100%;border:none;border-radius:10px;display:block}
+    /* Chess board */
+    .chessboard{display:grid;grid-template-columns:repeat(8,1fr);
+                width:min(640px,100%);margin:0 auto;
+                border-radius:6px;overflow:hidden;
+                box-shadow:0 4px 24px rgba(0,0,0,.6)}
+    .sq{aspect-ratio:1;display:flex;align-items:center;justify-content:center}
+    .sql{background:#f0d9b5}.sqd{background:#b58863}
+    .pw,.pb{font-size:min(64px,10.5vw);line-height:1;user-select:none}
+    .pw{color:#fff;text-shadow:0 0 4px #000,0 0 4px #000}
+    .pb{color:#111}
     #idle{text-align:center;padding:60px 20px}
     .pulse{animation:p 2s ease-in-out infinite}
     @keyframes p{0%,100%{opacity:1}50%{opacity:.3}}
@@ -75,9 +87,6 @@ _HTML = b"""<!DOCTYPE html>
     #countdown{color:#c89b3c;font-weight:600;font-size:.95rem}
     a{color:#c89b3c;text-decoration:none}
     a:hover{text-decoration:underline}
-    .btn{background:none;border:1px solid #555;color:#aaa;padding:3px 11px;
-         border-radius:6px;cursor:pointer;font-size:.79rem;font-family:inherit}
-    .btn:hover{border-color:#c89b3c;color:#c89b3c}
   </style>
 </head>
 <body>
@@ -97,39 +106,67 @@ _HTML = b"""<!DOCTYPE html>
     <div><a id="tv" href="#" target="_blank">Watch on Lichess TV</a></div>
   </div>
   <script>
-    var viewingId = null;
-    var viewingIsLive = false;
-    var pinnedPrev = false;
+    /* Unicode chess pieces (white / black) */
+    var WP = {
+      'K':'\\u2654','Q':'\\u2655','R':'\\u2656','B':'\\u2657','N':'\\u2658','P':'\\u2659'
+    };
+    var BP = {
+      'k':'\\u265a','q':'\\u265b','r':'\\u265c','b':'\\u265d','n':'\\u265e','p':'\\u265f'
+    };
+
+    var shownFen   = null;
+    var shownColor = null;
     var nextChalAt = null;
-    var lastState = null;
+    var lastState  = null;
 
-    /* Countdown -- runs every second independently of the fetch loop */
-    setInterval(function() {
-      var el = document.getElementById('countdown');
-      if (!el) return;
-      if (lastState && lastState.game_id) { el.textContent = ''; return; }
-      if (!nextChalAt) { el.textContent = ''; return; }
-      var rem = Math.max(0, Math.round(nextChalAt - Date.now() / 1000));
-      if (rem === 0) { el.textContent = 'Challenge sent!'; return; }
-      var m = Math.floor(rem / 60);
-      var s = rem % 60;
-      el.textContent = 'Next challenge in: ' + m + ':' + (s < 10 ? '0' : '') + s;
-    }, 1000);
+    function renderBoard(fen, color) {
+      var pos = (fen || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR').split(' ')[0];
+      var rows = pos.split('/');
+      var flipped = (color === 'black');
 
-    function showIframe(id, isLive) {
-      /* Skip reload only when both id and live-state are unchanged */
-      if (viewingId === id && viewingIsLive === isLive) return;
-      viewingId = id;
-      viewingIsLive = isLive;
-      /* Always start at the latest move; live games continue streaming from there */
-      var url = 'https://lichess.org/embed/game/' + id + '?theme=brown&bg=dark#last';
-      document.getElementById('board').innerHTML =
-        '<iframe src="' + url + '" height="600" allowtransparency="true"></iframe>';
+      /* Expand each FEN rank to exactly 8 squares */
+      var grid = rows.map(function(row) {
+        var sq = [];
+        for (var i = 0; i < row.length; i++) {
+          var c = row[i];
+          if (c >= '1' && c <= '8') { for (var j = 0; j < +c; j++) sq.push(''); }
+          else sq.push(c);
+        }
+        return sq;
+      });
+
+      if (flipped) {
+        grid.reverse();
+        grid = grid.map(function(r) { return r.slice().reverse(); });
+      }
+
+      var html = '<div class="chessboard">';
+      for (var r = 0; r < 8; r++) {
+        for (var c = 0; c < 8; c++) {
+          var rank = flipped ? r + 1 : 8 - r;
+          var file = flipped ? 7 - c : c;
+          var light = (rank + file) % 2 === 0;
+          var p = grid[r][c];
+          html += '<div class="sq ' + (light ? 'sql' : 'sqd') + '">';
+          if (p) {
+            var isW = (p === p.toUpperCase());
+            html += '<span class="' + (isW ? 'pw' : 'pb') + '">' +
+                    (isW ? (WP[p]||'') : (BP[p.toLowerCase()]||'')) + '</span>';
+          }
+          html += '</div>';
+        }
+      }
+      return html + '</div>';
+    }
+
+    function showBoard(fen, color) {
+      if (fen === shownFen && color === shownColor) return;
+      shownFen = fen; shownColor = color;
+      document.getElementById('board').innerHTML = renderBoard(fen, color);
     }
 
     function showIdle() {
-      viewingId = null;
-      viewingIsLive = false;
+      shownFen = null; shownColor = null;
       document.getElementById('board').innerHTML =
         '<div id="idle"><p class="pulse">Waiting for a game&hellip;</p></div>';
     }
@@ -139,74 +176,67 @@ _HTML = b"""<!DOCTYPE html>
                       .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
 
+    /* Countdown -- runs every second */
+    setInterval(function() {
+      var el = document.getElementById('countdown');
+      if (!el) return;
+      if (lastState && lastState.game_id) { el.textContent = ''; return; }
+      if (!nextChalAt) { el.textContent = ''; return; }
+      var rem = Math.max(0, Math.round(nextChalAt - Date.now() / 1000));
+      if (rem === 0) { el.textContent = 'Challenge sent!'; return; }
+      var m = Math.floor(rem / 60), s = rem % 60;
+      el.textContent = 'Next challenge in: ' + m + ':' + (s < 10 ? '0' : '') + s;
+    }, 1000);
+
     function render(d) {
-      var liveId  = d.game_id      || null;
-      var lastId  = d.last_game_id || null;
-      var u       = d.bot_username || 'OUROBOROS';
-      var opp     = d.opponent_username || null;
-      var ourCol  = d.our_color || null;
-      var revenge = d.is_revenge || false;
+      var liveId = d.game_id      || null;
+      var lastId = d.last_game_id || null;
+      var u      = d.bot_username || 'OUROBOROS';
+      var opp    = d.opponent_username || null;
+      var ourCol = d.our_color || null;
+      var fen    = d.current_fen || null;
 
       var tv = document.getElementById('tv');
       if (tv) tv.href = 'https://lichess.org/@/' + u + '/tv';
 
       if (d.next_challenge_at) nextChalAt = d.next_challenge_at;
 
-      /* Board auto-switching */
-      if (!liveId) {
-        pinnedPrev = false;
-        if (viewingId && viewingId !== lastId) { viewingId = null; viewingIsLive = false; }
-      }
-      if (liveId && !pinnedPrev) { showIframe(liveId, true); }
-      else if (!liveId && lastId) { showIframe(lastId, false); }
-      else if (!liveId && !lastId) { showIdle(); }
+      /* Board: always show current FEN from our API */
+      if (liveId)      showBoard(fen, ourCol);
+      else if (lastId) showBoard(fen, null);
+      else             showIdle();
 
       /* Badge row */
       var br = document.getElementById('badge-row');
       var bHtml = '';
       if (liveId) {
         bHtml += '<span class="badge live">&#9679;&nbsp;LIVE</span>';
-        if (revenge) bHtml += '<span class="badge revenge">REVENGE</span>';
-      } else if (lastId || viewingId) {
+        if (d.is_revenge) bHtml += '<span class="badge revenge">REVENGE</span>';
+      } else if (lastId) {
         bHtml += '<span class="badge ended">ENDED</span>';
       }
       br.innerHTML = bHtml;
 
-      /* Matchup line -- only while a live game is active */
+      /* Matchup line */
       var mu = document.getElementById('matchup');
       if (liveId && opp && ourCol) {
         var white = ourCol === 'white' ? u : opp;
         var black = ourCol === 'black' ? u : opp;
         mu.innerHTML =
-          '<span class="side">' +
-            '<span class="piece">&#9817;</span>' +
-            '<span class="uname">' + escHtml(white) + '</span>' +
-          '</span>' +
+          '<span class="side"><span class="piece">&#9817;</span>' +
+          '<span class="uname">' + escHtml(white) + '</span></span>' +
           '<span class="vs">vs</span>' +
-          '<span class="side">' +
-            '<span class="piece">&#9823;</span>' +
-            '<span class="uname">' + escHtml(black) + '</span>' +
-          '</span>';
+          '<span class="side"><span class="piece">&#9823;</span>' +
+          '<span class="uname">' + escHtml(black) + '</span></span>';
       } else {
         mu.innerHTML = '';
       }
 
-      /* Links row */
-      var lHtml = '';
-      if (viewingId) {
-        lHtml += '<a href="https://lichess.org/' + viewingId +
-                 '" target="_blank">Open on Lichess &#x2197;</a>';
-      }
-      if (liveId && lastId) {
-        if (!pinnedPrev) {
-          lHtml += '<button class="btn" data-id="' + lastId +
-                   '" onclick="switchToPrev(this.dataset.id)">&#8592; Previous game</button>';
-        } else {
-          lHtml += '<button class="btn" data-id="' + liveId +
-                   '" onclick="switchToLive(this.dataset.id)">&#9679; Back to live</button>';
-        }
-      }
-      document.getElementById('links').innerHTML = lHtml;
+      /* Links */
+      var viewId = liveId || lastId;
+      document.getElementById('links').innerHTML = viewId
+        ? '<a href="https://lichess.org/' + viewId + '" target="_blank">Open on Lichess &#x2197;</a>'
+        : '';
 
       /* Record */
       var rec = document.getElementById('record');
@@ -227,20 +257,8 @@ _HTML = b"""<!DOCTYPE html>
       }).catch(function(){});
     }
 
-    function switchToPrev(id) {
-      pinnedPrev = true;
-      showIframe(id, false);
-      if (lastState) render(lastState);
-    }
-
-    function switchToLive(id) {
-      pinnedPrev = false;
-      showIframe(id, true);
-      if (lastState) render(lastState);
-    }
-
     tick();
-    setInterval(tick, 4000);
+    setInterval(tick, 3000);
   </script>
 </body>
 </html>"""
@@ -272,6 +290,12 @@ def update_game_details(
         _state["opponent_username"] = opponent_username
         _state["our_color"] = our_color
         _state["is_revenge"] = is_revenge
+
+
+def update_fen(fen: str) -> None:
+    """Update the current board position after each move."""
+    with _lock:
+        _state["current_fen"] = fen
 
 
 def set_username(username: str) -> None:
