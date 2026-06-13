@@ -13,6 +13,7 @@ from ouroboros.lichess.client import LichessClient
 from ouroboros.opponents.adapt import OpponentContext, get_root_bias, is_book_speed
 from ouroboros.opponents.antibot import AntiBotController
 from ouroboros import status as st
+from ouroboros.web_viewer import update_fen
 
 log = logging.getLogger(__name__)
 
@@ -180,6 +181,8 @@ class GameRunner:
 
         self._board = board
         self._move_list = move_list
+
+        update_fen(board.fen())
 
         opponent_username = "opponent"
         st.update(live_game=f"{opponent_username} ({len(move_list)} moves)")
