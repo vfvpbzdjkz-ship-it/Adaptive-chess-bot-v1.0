@@ -97,8 +97,7 @@ def _hf_pull(cfg: dict, remote_paths: list[str]) -> bool:
             local.parent.mkdir(parents=True, exist_ok=True)
             try:
                 hf_hub_download(repo_id=repo, filename=rp, repo_type="model",
-                                token=token, local_dir=".",
-                                local_dir_use_symlinks=False)
+                                token=token, local_dir=".")
                 # If DB_PATH differs from the download location, copy it there
                 if rp == "data/ouroboros.db" and DB_PATH != Path("data/ouroboros.db"):
                     if local.exists():
