@@ -5,6 +5,8 @@ builder = "dockerfile"
 startCommand = "python main.py"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 10
+healthcheckPath = "/health"
+healthcheckTimeout = 300
 
 [[volumes]]
 mountPath = "/app/data"

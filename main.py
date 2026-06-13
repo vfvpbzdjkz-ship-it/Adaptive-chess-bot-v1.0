@@ -71,8 +71,14 @@ def run_auto(cfg: dict) -> None:
     from ouroboros.persistence import meta_get
     from ouroboros import status as st
     from ouroboros.sync import pull_latest, PeriodicSync
+    from ouroboros.web_viewer import WebViewer, update_game, set_username
 
     log = logging.getLogger(__name__)
+
+    # Start spectator web page immediately so Railway health checks pass
+    viewer = WebViewer()
+    set_username(cfg.get("bot_username", ""))
+    viewer.start()
 
     # Pull latest weights + DB from HF Hub before loading (no-op if not configured)
     pull_latest(cfg)
@@ -97,11 +103,13 @@ def run_auto(cfg: dict) -> None:
         log.info("Game started: %s — throttling self-play", game_id)
         sp_manager.throttle(True)
         st.update(live_game=game_id)
+        update_game(game_id)
 
     def on_game_finish(game_id: str, result, opp_username, opp_elo, opp_is_bot) -> None:
         log.info("Game %s finished: %s vs %s", game_id, result, opp_username)
         sp_manager.throttle(False)
         st.update(live_game=None, lichess_games=st._state.get("lichess_games", 0) + 1)
+        update_game(None)
         # Note: online.py is called from game.py pipeline via events;
         # here we handle PGN retrieval for full processing
         _fetch_and_process_game(client, buffer, game_id, result, opp_username, opp_elo, opp_is_bot, cfg)
@@ -135,6 +143,7 @@ def run_auto(cfg: dict) -> None:
         trainer.stop()
         sp_manager.stop()
         periodic_sync.stop()
+        viewer.stop()
         buffer.flush()
         st.stop()
         sys.exit(0)
