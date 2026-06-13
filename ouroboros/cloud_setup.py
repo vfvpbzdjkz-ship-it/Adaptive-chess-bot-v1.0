@@ -98,7 +98,9 @@ def run_cloud_setup() -> dict:
     profile = _env("HARDWARE_PROFILE", "small")
     device = "cpu"
     import multiprocessing
-    n_workers = max(1, multiprocessing.cpu_count() - 1)
+    # Railway free tier reports many vCPUs but is memory/CPU-constrained;
+    # cap to 4 to avoid thrashing.
+    n_workers = min(4, max(1, multiprocessing.cpu_count() - 1))
 
     # Try GPU just in case a paid Railway instance has one
     try:

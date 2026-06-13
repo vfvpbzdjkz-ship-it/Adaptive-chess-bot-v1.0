@@ -99,7 +99,12 @@ def init_db() -> None:
 def get_db():
     conn = sqlite3.connect(str(DB_PATH), timeout=30)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+    except sqlite3.OperationalError:
+        # Network-attached volumes (e.g. Railway) may not support WAL locking;
+        # fall back to the default DELETE journal which works everywhere.
+        conn.execute("PRAGMA journal_mode=DELETE")
     conn.execute("PRAGMA synchronous=NORMAL")
     try:
         yield conn
