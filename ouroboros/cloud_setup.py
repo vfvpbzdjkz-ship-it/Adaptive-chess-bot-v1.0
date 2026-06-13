@@ -141,6 +141,9 @@ def run_cloud_setup() -> dict:
         "max_concurrent_games": _env_int("MAX_CONCURRENT_GAMES", 1),
         "chat_enabled": _env_bool("CHAT_ENABLED", True),
         "winner_imitation": _env_bool("WINNER_IMITATION", True),
+        # Railway free tier: 10 K positions ≈ 100 MB on disk (vs 2 GB default).
+        # Override with BUFFER_CAPACITY env var if you have more storage.
+        "buffer_capacity": _env_int("BUFFER_CAPACITY", 10_000),
     })
 
     # Ensure directories exist
@@ -153,8 +156,10 @@ def run_cloud_setup() -> dict:
     # Run seed if no checkpoint exists yet
     from ouroboros.engine.network import best_path
     if not best_path().exists():
-        n_games = _env_int("SEED_GAMES", 5_000)
-        train_steps = _env_int("SEED_TRAIN_STEPS", 1_000)
+        # Seed uses pure heuristics (no MCTS), so 500 games ≈ a few seconds.
+        # Increase SEED_GAMES / SEED_TRAIN_STEPS via env vars for a stronger start.
+        n_games = _env_int("SEED_GAMES", 500)
+        train_steps = _env_int("SEED_TRAIN_STEPS", 500)
         print(f"Running seed bootstrap ({n_games} games, {train_steps} steps)...")
         print("This is a one-time step. Progress is saved — safe to restart.")
         from ouroboros.learning.seed import run_seed

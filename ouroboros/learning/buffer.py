@@ -62,8 +62,15 @@ class ReplayBuffer:
         self._count: int = meta.get("count", 0)
 
     def _open_or_create(self, path: Path, shape: tuple, dtype) -> np.ndarray:
+        expected_bytes = int(np.prod(shape)) * np.dtype(dtype).itemsize
         if path.exists():
-            return np.memmap(str(path), dtype=dtype, mode="r+", shape=shape)
+            actual_bytes = path.stat().st_size
+            if actual_bytes == expected_bytes:
+                return np.memmap(str(path), dtype=dtype, mode="r+", shape=shape)
+            # Wrong size — from a failed/resized deployment. Delete and recreate.
+            log.warning("Buffer %s: expected %d bytes, found %d; recreating",
+                        path.name, expected_bytes, actual_bytes)
+            path.unlink()
         arr = np.memmap(str(path), dtype=dtype, mode="w+", shape=shape)
         arr[:] = 0
         arr.flush()
