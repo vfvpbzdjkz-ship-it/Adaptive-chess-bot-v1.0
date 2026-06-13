@@ -25,6 +25,7 @@ RUN pip install --no-cache-dir \
 COPY . .
 
 RUN mkdir -p data/models data/buffer data/logs
+# bust cache if needed: 2026-06-13
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
