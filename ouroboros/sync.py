@@ -72,10 +72,12 @@ def _hf_push(cfg: dict, paths: list[Path], message: str) -> bool:
         for p in paths:
             if not p.exists():
                 continue
-            api.upload_file(path_or_fileobj=str(p), path_in_repo=str(p),
+            # DB may live in /tmp locally; always store it as data/ouroboros.db remotely
+            remote = "data/ouroboros.db" if p.name == "ouroboros.db" else str(p)
+            api.upload_file(path_or_fileobj=str(p), path_in_repo=remote,
                             repo_id=repo, repo_type="model",
                             commit_message=message)
-            log.info("HF push: %s", p)
+            log.info("HF push: %s → %s", p, remote)
         return True
     except Exception as e:
         log.warning("HF push failed: %s", e)
@@ -83,10 +85,12 @@ def _hf_push(cfg: dict, paths: list[Path], message: str) -> bool:
 
 
 def _hf_pull(cfg: dict, remote_paths: list[str]) -> bool:
+    from ouroboros.persistence import DB_PATH
     token, repo = _hf_credentials(cfg)
     if not token or not repo:
         return False
     try:
+        import shutil
         from huggingface_hub import hf_hub_download
         for rp in remote_paths:
             local = Path(rp)
@@ -95,6 +99,11 @@ def _hf_pull(cfg: dict, remote_paths: list[str]) -> bool:
                 hf_hub_download(repo_id=repo, filename=rp, repo_type="model",
                                 token=token, local_dir=".",
                                 local_dir_use_symlinks=False)
+                # If DB_PATH differs from the download location, copy it there
+                if rp == "data/ouroboros.db" and DB_PATH != Path("data/ouroboros.db"):
+                    if local.exists():
+                        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(str(local), str(DB_PATH))
                 log.info("HF pull: %s", rp)
             except Exception as e:
                 log.debug("HF pull skip %s: %s", rp, e)
@@ -116,11 +125,19 @@ def _gdrive_push(paths: list[Path], message: str) -> bool:
 
 
 def _gdrive_pull(remote_paths: list[str]) -> bool:
+    from ouroboros.persistence import DB_PATH
     from ouroboros.sync_gdrive import pull as gd_pull
+    import shutil
     ok = True
     for rp in remote_paths:
         # remote name = just the filename; local path = full relative path
         ok = gd_pull(Path(rp).name, Path(rp)) and ok
+        # If DB_PATH differs from the download location, copy it there
+        if rp == "data/ouroboros.db" and DB_PATH != Path("data/ouroboros.db"):
+            local = Path(rp)
+            if local.exists():
+                DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(local), str(DB_PATH))
     return ok
 
 
@@ -184,7 +201,8 @@ def push_db(cfg: dict = None) -> None:
     b = _backend()
     if b == "none":
         return
-    paths = [Path("data/ouroboros.db")]
+    from ouroboros.persistence import DB_PATH
+    paths = [DB_PATH]
     if b == "gdrive":
         _gdrive_push(paths, "db update")
     else:

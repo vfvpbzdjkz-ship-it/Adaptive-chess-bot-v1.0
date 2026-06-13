@@ -8,11 +8,19 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-DB_PATH = Path("data/ouroboros.db")
+# Railway volumes don't support SQLite's POSIX file locking (fcntl).
+# In cloud mode (LICHESS_TOKEN is set) store the DB in /tmp (local tmpfs)
+# where locking always works. The sync module persists it to HF/GDrive.
+DB_PATH = (
+    Path("/tmp/ouroboros.db")
+    if os.environ.get("LICHESS_TOKEN", "").strip()
+    else Path("data/ouroboros.db")
+)
 
 
 def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    log.info("SQLite DB at %s", DB_PATH)
     with get_db() as conn:
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS opponents (
@@ -97,13 +105,11 @@ def init_db() -> None:
 
 @contextmanager
 def get_db():
-    # nolock=1: skip POSIX file locking — required for NFS/network volumes
-    # (Railway, and similar) that don't implement fcntl advisory locks.
-    # WAL mode is incompatible with nolock; DELETE (default) is used instead.
-    db_uri = f"file:{DB_PATH.absolute()}?nolock=1"
-    conn = sqlite3.connect(db_uri, uri=True, timeout=30)
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(DB_PATH), timeout=30)
     conn.row_factory = sqlite3.Row
     try:
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
     except sqlite3.OperationalError:
         pass
