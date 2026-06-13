@@ -56,6 +56,20 @@ def _load_net(cfg: dict):
     else:
         logging.getLogger(__name__).warning("No checkpoint found; using random weights")
     net.eval()
+
+    # Warm up PyTorch: the first forward pass initialises kernels and can take
+    # many seconds on CPU; doing it now avoids a freeze on the first game move.
+    try:
+        import torch
+        import chess as _chess
+        from ouroboros.engine.encoding import board_to_tensor
+        with torch.inference_mode():
+            dummy = board_to_tensor(_chess.Board()).unsqueeze(0).to(device)
+            net(dummy)
+        logging.getLogger(__name__).info("Network warmup complete")
+    except Exception as _e:
+        logging.getLogger(__name__).debug("Warmup skipped: %s", _e)
+
     return net, device
 
 

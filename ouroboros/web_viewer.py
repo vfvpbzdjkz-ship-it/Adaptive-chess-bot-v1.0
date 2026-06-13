@@ -105,6 +105,7 @@ _HTML = b"""<!DOCTYPE html>
     setInterval(function() {
       var el = document.getElementById('countdown');
       if (!el) return;
+      if (lastState && lastState.game_id) { el.textContent = ''; return; }
       if (!nextChalAt) { el.textContent = ''; return; }
       var rem = Math.max(0, Math.round(nextChalAt - Date.now() / 1000));
       if (rem === 0) { el.textContent = 'Challenge sent!'; return; }
