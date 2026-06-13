@@ -192,11 +192,11 @@ _HTML = b"""<!DOCTYPE html>
       }
       if (liveId && lastId) {
         if (!pinnedPrev) {
-          lHtml += '<button class="btn" onclick="switchToPrev(\'' +
-                   lastId + '\')">' + '&#8592; Previous game</button>';
+          lHtml += '<button class="btn" data-id="' + lastId +
+                   '" onclick="switchToPrev(this.dataset.id)">&#8592; Previous game</button>';
         } else {
-          lHtml += '<button class="btn" onclick="switchToLive(\'' +
-                   liveId + '\')">' + '&#9679; Back to live</button>';
+          lHtml += '<button class="btn" data-id="' + liveId +
+                   '" onclick="switchToLive(this.dataset.id)">&#9679; Back to live</button>';
         }
       }
       document.getElementById('links').innerHTML = lHtml;
