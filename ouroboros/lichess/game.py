@@ -19,6 +19,8 @@ log = logging.getLogger(__name__)
 RESIGN_THRESHOLD = -0.95
 RESIGN_CONSECUTIVE = 6
 DRAW_THRESHOLD = 0.05
+# Abort (< 2 moves) or resign (≥ 2 moves) when opponent is silent this long.
+OPPONENT_TIMEOUT_SECONDS = 5 * 60
 
 
 class GameRunner:
@@ -60,13 +62,37 @@ class GameRunner:
         self._result: Optional[str] = None  # "win" | "loss" | "draw"
         self._our_move_values: list[float] = []
         self._our_move_ucis: list[str] = []
+        self._opponent_turn_start: float = 0.0  # wall-clock time opponent's turn began
+
+    def _watchdog_loop(self) -> None:
+        """Abort or resign if the opponent goes silent for too long."""
+        timeout = self.cfg.get("opponent_timeout_seconds", OPPONENT_TIMEOUT_SECONDS)
+        while not self._done.wait(timeout=10):
+            t = self._opponent_turn_start
+            if t > 0 and time.time() - t > timeout:
+                n = len(self._move_list)
+                action = "aborting" if n < 2 else "resigning"
+                log.info("Opponent silent %.0fs in game %s (%d moves); %s",
+                         time.time() - t, self.game_id, n, action)
+                if n < 2:
+                    self.client.abort_game(self.game_id)
+                    self._result = "draw"
+                else:
+                    self.client.resign_game(self.game_id)
+                    self._result = "loss"
+                self._done.set()
+                return
 
     def run(self) -> Optional[str]:
         """Stream game, play moves, return result string."""
         if self.cfg.get("chat_enabled", True):
             self.client.chat(self.game_id, "player", "glhf!")
 
+        threading.Thread(target=self._watchdog_loop, daemon=True).start()
+
         for event in self.client.stream(f"/api/bot/game/stream/{self.game_id}"):
+            if self._done.is_set():
+                break
             if event.get("type") == "gameFull":
                 self._handle_game_full(event)
             elif event.get("type") == "gameState":
@@ -90,7 +116,10 @@ class GameRunner:
         state = event.get("state", {})
         self._apply_state(state)
         if self._board.turn == self.our_chess_color:
+            self._opponent_turn_start = 0.0
             self._think_and_move(state)
+        else:
+            self._opponent_turn_start = time.time()
 
     def _handle_game_state(self, event: dict) -> None:
         status = event.get("status", "")
@@ -114,7 +143,11 @@ class GameRunner:
             return
 
         if self._board.turn == self.our_chess_color:
+            self._opponent_turn_start = 0.0  # opponent just moved; our turn
             self._think_and_move(event)
+        else:
+            if self._opponent_turn_start == 0.0:
+                self._opponent_turn_start = time.time()  # we just moved; start timer
 
     def _apply_state(self, state: dict) -> None:
         moves_str = state.get("moves", "")
