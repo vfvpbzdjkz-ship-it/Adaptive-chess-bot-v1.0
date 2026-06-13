@@ -29,6 +29,4 @@ RUN mkdir -p data/models data/buffer data/logs
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
-VOLUME ["/app/data"]
-
 CMD ["python", "main.py"]
