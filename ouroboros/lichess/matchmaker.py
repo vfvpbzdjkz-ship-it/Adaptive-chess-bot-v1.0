@@ -12,6 +12,7 @@ log = logging.getLogger(__name__)
 
 CHALLENGE_INTERVAL = 180  # seconds between challenges (max N/hr enforced)
 MAX_PER_HOUR = 10
+MAX_RETRIES = 5  # how many different bots to try per cycle before giving up
 
 
 def _set_next_challenge(ts: float) -> None:
@@ -55,46 +56,60 @@ class Matchmaker:
 
             max_per_hour = self.cfg.get("matchmaker_max_per_hour", MAX_PER_HOUR)
             if self._challenges_this_hour >= max_per_hour:
-                continue
-
-            target = self._pick_target()
-            if not target:
-                continue
-
-            username = target.get("id", "")
-            if not username:
+                _set_next_challenge(time.time() + CHALLENGE_INTERVAL)
                 continue
 
             t_limit = self.cfg.get("matchmaker_time", 5)
             t_inc = self.cfg.get("matchmaker_increment", 3)
-            log.info("Matchmaker: challenging %s (%d+%d)", username, t_limit, t_inc)
+            tried: set[str] = set()
 
-            try:
-                self.client.challenge_player(username, t_limit, t_inc, rated=False)
-                self._challenges_this_hour += 1
-            except Exception as e:
-                log.debug("Challenge to %s failed: %s", username, e)
+            for attempt in range(MAX_RETRIES):
+                target = self._pick_target(exclude=tried)
+                if not target:
+                    break
+
+                username = target.get("id", "")
+                if not username:
+                    break
+                tried.add(username)
+
+                label = f" [retry {attempt}]" if attempt else ""
+                log.info("Matchmaker: challenging %s (%d+%d)%s", username, t_limit, t_inc, label)
+
+                try:
+                    result = self.client.challenge_player(username, t_limit, t_inc, rated=False)
+                    if result is not None:
+                        # Challenge accepted by Lichess API — stop retrying this cycle
+                        self._challenges_this_hour += 1
+                        break
+                    log.debug("Challenge to %s returned no data; trying another bot", username)
+                except Exception as e:
+                    log.debug("Challenge to %s failed (%s); trying another bot", username, e)
 
             _set_next_challenge(time.time() + CHALLENGE_INTERVAL)
 
-    def _pick_target(self) -> Optional[dict]:
-        """Pick a bot to challenge. Prefer bots with negative score against us."""
-        # Get revenge targets first
+    def _pick_target(self, exclude: set[str] | None = None) -> Optional[dict]:
+        """Pick a bot to challenge. Prefer revenge targets; skip already-tried ones."""
+        exclude = exclude or set()
+
+        # Revenge targets first (bots that have beaten us more than we've beaten them)
         with get_db() as conn:
             rows = conn.execute(
-                "SELECT username FROM opponents WHERE is_bot=1 AND losses_vs_us > wins_vs_us ORDER BY losses_vs_us-wins_vs_us DESC LIMIT 5",
+                "SELECT username FROM opponents "
+                "WHERE is_bot=1 AND losses_vs_us > wins_vs_us "
+                "ORDER BY losses_vs_us-wins_vs_us DESC LIMIT 10",
             ).fetchall()
-            revenge_targets = [r["username"] for r in rows]
+            revenge_targets = [r["username"] for r in rows if r["username"] not in exclude]
 
         if revenge_targets:
-            target_name = random.choice(revenge_targets)
-            return {"id": target_name}
+            return {"id": random.choice(revenge_targets)}
 
-        # Otherwise pick a random online bot
+        # Fall back to a random online bot, excluding already-tried ones
         try:
             bots = []
             for bot in self.client.get_online_bots():
-                bots.append(bot)
+                if bot.get("id", "") not in exclude:
+                    bots.append(bot)
                 if len(bots) >= 50:
                     break
             if not bots:
