@@ -97,6 +97,7 @@ _HTML = b"""<!DOCTYPE html>
   </div>
   <script>
     var viewingId = null;
+    var viewingIsLive = false;
     var pinnedPrev = false;
     var nextChalAt = null;
     var lastState = null;
@@ -114,16 +115,21 @@ _HTML = b"""<!DOCTYPE html>
       el.textContent = 'Next challenge in: ' + m + ':' + (s < 10 ? '0' : '') + s;
     }, 1000);
 
-    function showIframe(id) {
-      if (viewingId === id) return;
+    function showIframe(id, isLive) {
+      /* Skip reload only when both id and live-state are unchanged */
+      if (viewingId === id && viewingIsLive === isLive) return;
       viewingId = id;
+      viewingIsLive = isLive;
+      /* Live games update in real-time; finished games start at #last move */
+      var url = 'https://lichess.org/embed/game/' + id + '?theme=brown&bg=dark';
+      if (!isLive) url += '#last';
       document.getElementById('board').innerHTML =
-        '<iframe src="https://lichess.org/embed/game/' + id +
-        '?theme=brown&bg=dark" height="397" allowtransparency="true"></iframe>';
+        '<iframe src="' + url + '" height="397" allowtransparency="true"></iframe>';
     }
 
     function showIdle() {
       viewingId = null;
+      viewingIsLive = false;
       document.getElementById('board').innerHTML =
         '<div id="idle"><p class="pulse">Waiting for a game&hellip;</p></div>';
     }
@@ -149,10 +155,10 @@ _HTML = b"""<!DOCTYPE html>
       /* Board auto-switching */
       if (!liveId) {
         pinnedPrev = false;
-        if (viewingId && viewingId !== lastId) viewingId = null;
+        if (viewingId && viewingId !== lastId) { viewingId = null; viewingIsLive = false; }
       }
-      if (liveId && !pinnedPrev) { showIframe(liveId); }
-      else if (!liveId && lastId && !viewingId) { showIframe(lastId); }
+      if (liveId && !pinnedPrev) { showIframe(liveId, true); }
+      else if (!liveId && lastId) { showIframe(lastId, false); }
       else if (!liveId && !lastId) { showIdle(); }
 
       /* Badge row */
@@ -223,13 +229,13 @@ _HTML = b"""<!DOCTYPE html>
 
     function switchToPrev(id) {
       pinnedPrev = true;
-      showIframe(id);
+      showIframe(id, false);
       if (lastState) render(lastState);
     }
 
     function switchToLive(id) {
       pinnedPrev = false;
-      showIframe(id);
+      showIframe(id, true);
       if (lastState) render(lastState);
     }
 

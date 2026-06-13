@@ -20,7 +20,7 @@ RESIGN_THRESHOLD = -0.95
 RESIGN_CONSECUTIVE = 6
 DRAW_THRESHOLD = 0.05
 # Abort (< 2 moves) or resign (≥ 2 moves) when opponent is silent this long.
-OPPONENT_TIMEOUT_SECONDS = 5 * 60
+OPPONENT_TIMEOUT_SECONDS = 90
 
 
 class GameRunner:
