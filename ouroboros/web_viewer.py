@@ -121,9 +121,8 @@ _HTML = b"""<!DOCTYPE html>
       if (viewingId === id && viewingIsLive === isLive) return;
       viewingId = id;
       viewingIsLive = isLive;
-      /* Live games update in real-time; finished games start at #last move */
-      var url = 'https://lichess.org/embed/game/' + id + '?theme=brown&bg=dark';
-      if (!isLive) url += '#last';
+      /* Always start at the latest move; live games continue streaming from there */
+      var url = 'https://lichess.org/embed/game/' + id + '?theme=brown&bg=dark#last';
       document.getElementById('board').innerHTML =
         '<iframe src="' + url + '" height="600" allowtransparency="true"></iframe>';
     }
