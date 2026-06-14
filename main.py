@@ -86,6 +86,7 @@ def run_auto(cfg: dict) -> None:
     from ouroboros import status as st
     from ouroboros.sync import pull_latest, PeriodicSync
     from ouroboros.web_viewer import update_game
+    from ouroboros.scheduler import PlayScheduler
 
     log = logging.getLogger(__name__)
 
@@ -135,7 +136,8 @@ def run_auto(cfg: dict) -> None:
     # Start everything
     sp_manager.start()
     trainer.start_background(status_fn=_update_status)
-    matchmaker.start()
+    play_scheduler = PlayScheduler(matchmaker)
+    play_scheduler.start()   # starts in Lichess mode; matchmaker started inside
     periodic_sync = PeriodicSync(cfg, interval_minutes=15)
     periodic_sync.start()
 
@@ -148,6 +150,7 @@ def run_auto(cfg: dict) -> None:
     def _on_signal(sig, frame):
         log.info("Shutdown signal received; stopping...")
         event_loop.stop()
+        play_scheduler.stop()
         matchmaker.stop()
         trainer.stop()
         sp_manager.stop()

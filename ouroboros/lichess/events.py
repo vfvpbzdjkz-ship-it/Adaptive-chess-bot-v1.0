@@ -144,6 +144,16 @@ class EventLoop:
             log.info("Declined challenge from %s (at max concurrent games)", challenger)
             return
 
+        # Decline during self-play-only hours
+        try:
+            from ouroboros.scheduler import is_lichess_active
+            if not is_lichess_active():
+                self.client.decline_challenge(challenge_id, "later")
+                log.info("Declined challenge from %s (self-play mode)", challenger)
+                return
+        except Exception:
+            pass
+
         accept, reason = _should_accept(challenge, self.cfg)
         if accept:
             log.info("Accepting challenge from %s (%s)", challenger, challenge_id)

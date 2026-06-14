@@ -66,8 +66,8 @@ class Matchmaker:
         if self._challenges_this_hour >= max_per_hour:
             return
 
-        t_limit = self.cfg.get("matchmaker_time", 5)
-        t_inc = self.cfg.get("matchmaker_increment", 3)
+        t_limit = self.cfg.get("matchmaker_time", 10)
+        t_inc = self.cfg.get("matchmaker_increment", 5)
         tried: set[str] = set()
 
         for attempt in range(MAX_RETRIES):
