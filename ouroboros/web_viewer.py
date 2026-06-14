@@ -301,7 +301,7 @@ _HTML = b"""<!DOCTYPE html>
       return (n || 0).toLocaleString();
     }
 
-    /* SVG sparkline — returns empty string if fewer than 2 points */
+    /* SVG sparkline -- returns empty string if fewer than 2 points */
     function sparkline(vals, w, h, col) {
       if (!vals || vals.length < 2) return '';
       var mn = Math.min.apply(null, vals);
@@ -410,7 +410,7 @@ _HTML = b"""<!DOCTYPE html>
       var bfEl = document.getElementById('tp-buf-fill');
       if (bfEl) bfEl.style.width = pct + '%';
       var biEl = document.getElementById('tp-buf-info');
-      if (biEl) biEl.textContent = pct + '% — ' + fmtNum(bf) + ' / ' + fmtNum(bc) + ' positions';
+      if (biEl) biEl.textContent = pct + '% -- ' + fmtNum(bf) + ' / ' + fmtNum(bc) + ' positions';
 
       /* ELO number + delta */
       var eloEl = document.getElementById('tp-elo-num');
