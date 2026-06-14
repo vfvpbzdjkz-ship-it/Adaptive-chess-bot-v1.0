@@ -7,6 +7,7 @@ Serves a single HTML page with:
 - Current play mode (Lichess / Selfplay) with countdown to next switch
 - Countdown to the next bot challenge
 - Running win/loss/draw record
+- Training & self-play dashboard: steps, loss sparkline, buffer fill, ELO chart
 
 Listens on $PORT (Railway injects this) or 8080.
 """
@@ -21,6 +22,7 @@ log = logging.getLogger(__name__)
 _STARTING_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
 _lock = threading.Lock()
+_force_game_callback = None
 _state: dict = {
     "game_id": None,
     "last_game_id": None,
@@ -39,6 +41,15 @@ _state: dict = {
     # Mode scheduling
     "play_mode": "lichess",     # "lichess" or "selfplay"
     "mode_switch_at": None,     # Unix timestamp of next mode switch
+    # Training & self-play stats
+    "train_steps": 0,
+    "last_loss": None,
+    "buffer_fill": 0,
+    "buffer_cap": 1_000_000,
+    "selfplay_games": 0,
+    "ladder_elo": 1500.0,
+    "loss_history": [],         # last 50 loss values for sparkline
+    "elo_history": [],          # ELO after each ladder match
 }
 
 _HTML = b"""<!DOCTYPE html>
@@ -51,7 +62,7 @@ _HTML = b"""<!DOCTYPE html>
     *{box-sizing:border-box;margin:0;padding:0}
     body{background:#1a1a2e;color:#e0e0e0;font-family:'Segoe UI',sans-serif;
          min-height:100vh;display:flex;flex-direction:column;align-items:center;
-         padding:28px 16px;gap:0}
+         padding:28px 16px 40px;gap:0}
     h1{color:#c89b3c;font-size:2rem;letter-spacing:3px;margin-bottom:4px}
     #sub{color:#666;font-size:.85rem;margin-bottom:10px}
     #mode-row{font-size:.82rem;margin-bottom:14px;letter-spacing:.5px;
@@ -96,6 +107,44 @@ _HTML = b"""<!DOCTYPE html>
     #countdown{color:#c89b3c;font-weight:600;font-size:.95rem}
     a{color:#c89b3c;text-decoration:none}
     a:hover{text-decoration:underline}
+    /* Force-game button */
+    #force-btn{background:#1e1e3a;color:#c89b3c;border:1px solid #c89b3c;
+               border-radius:6px;padding:6px 14px;font-size:.75rem;font-weight:700;
+               letter-spacing:1px;cursor:pointer;transition:background .15s,color .15s}
+    #force-btn:hover:not(:disabled){background:#c89b3c;color:#1a1a2e}
+    #force-btn:disabled{opacity:.45;cursor:default}
+    /* Training panel */
+    #train-panel{width:820px;max-width:96%;margin-top:22px;
+                 border:1px solid #2a2a4a;border-radius:10px;
+                 padding:18px 20px;background:#141428}
+    .tp-hdr{color:#c89b3c;font-size:.72rem;font-weight:700;
+            letter-spacing:2.5px;margin-bottom:14px}
+    .tp-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;
+             margin-bottom:14px}
+    .tp-box{background:#1e1e3a;border-radius:6px;padding:10px 12px}
+    .tp-lbl{color:#555;font-size:.67rem;letter-spacing:.5px;
+            text-transform:uppercase;margin-bottom:5px}
+    .tp-val{color:#e0e0e0;font-size:1.1rem;font-weight:700;letter-spacing:.5px}
+    .tp-spk{margin-top:6px;line-height:0}
+    .tp-divider{border:none;border-top:1px solid #2a2a4a;margin:12px 0}
+    /* Buffer bar */
+    .buf-lbl{color:#555;font-size:.67rem;letter-spacing:.5px;
+             text-transform:uppercase;margin-bottom:6px}
+    .buf-track{background:#1e1e3a;border-radius:4px;height:8px;overflow:hidden}
+    .buf-fill{background:linear-gradient(90deg,#8a6a20,#c89b3c);
+              height:100%;border-radius:4px;transition:width .6s ease}
+    .buf-info{color:#888;font-size:.73rem;margin-top:5px}
+    /* ELO row */
+    #tp-elo{display:flex;align-items:flex-start;gap:22px;margin-top:14px}
+    .elo-block{min-width:80px}
+    .elo-lbl{color:#555;font-size:.67rem;letter-spacing:.5px;
+             text-transform:uppercase;margin-bottom:5px}
+    .elo-num{font-size:1.6rem;font-weight:700;color:#c89b3c;letter-spacing:1px}
+    .elo-delta{font-size:.78rem;margin-top:3px;font-weight:600}
+    .elo-up{color:#6fcf6f}.elo-dn{color:#cf6f6f}.elo-flat{color:#555}
+    .spk-lbl{color:#555;font-size:.67rem;letter-spacing:.5px;
+             text-transform:uppercase;margin-bottom:6px}
+    .spk-empty{color:#555;font-size:.73rem;font-style:italic;padding-top:8px}
   </style>
 </head>
 <body>
@@ -114,6 +163,28 @@ _HTML = b"""<!DOCTYPE html>
     <div id="record"></div>
     <div id="countdown"></div>
     <div><a id="tv" href="#" target="_blank">Watch on Lichess TV</a></div>
+  </div>
+  <div id="train-panel">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <div class="tp-hdr" style="margin-bottom:0">TRAINING &amp; SELF-PLAY</div>
+      <button id="force-btn" onclick="forceGame()">&#9654; Play One Game</button>
+    </div>
+    <div class="tp-grid" id="tp-stats"></div>
+    <hr class="tp-divider">
+    <div class="buf-lbl">REPLAY BUFFER</div>
+    <div class="buf-track"><div class="buf-fill" id="tp-buf-fill" style="width:0%"></div></div>
+    <div class="buf-info" id="tp-buf-info"></div>
+    <div id="tp-elo">
+      <div class="elo-block">
+        <div class="elo-lbl">INTERNAL ELO</div>
+        <div class="elo-num" id="tp-elo-num">1500</div>
+        <div class="elo-delta" id="tp-elo-delta"></div>
+      </div>
+      <div style="flex:1">
+        <div class="spk-lbl">ELO HISTORY</div>
+        <div id="tp-elo-chart"><div class="spk-empty">Populates after first ladder match</div></div>
+      </div>
+    </div>
   </div>
   <script>
     /* Unicode chess pieces (white / black) */
@@ -226,6 +297,29 @@ _HTML = b"""<!DOCTYPE html>
                       .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
 
+    function fmtNum(n) {
+      return (n || 0).toLocaleString();
+    }
+
+    /* SVG sparkline — returns empty string if fewer than 2 points */
+    function sparkline(vals, w, h, col) {
+      if (!vals || vals.length < 2) return '';
+      var mn = Math.min.apply(null, vals);
+      var mx = Math.max.apply(null, vals);
+      var rng = mx - mn || 1;
+      var pts = vals.map(function(v, i) {
+        var x = (i / (vals.length - 1) * w).toFixed(1);
+        var y = ((1 - (v - mn) / rng) * h).toFixed(1);
+        return x + ',' + y;
+      }).join(' ');
+      /* last value dot */
+      var lx = w, ly = ((1-(vals[vals.length-1]-mn)/rng)*h).toFixed(1);
+      return '<svg width="'+w+'" height="'+h+'" viewBox="0 0 '+w+' '+h+'" style="display:block;overflow:visible">' +
+        '<polyline points="'+pts+'" fill="none" stroke="'+col+'" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>' +
+        '<circle cx="'+lx+'" cy="'+ly+'" r="2.5" fill="'+col+'"/>' +
+        '</svg>';
+    }
+
     function render(d) {
       var liveId = d.game_id      || null;
       var lastId = d.last_game_id || null;
@@ -286,6 +380,81 @@ _HTML = b"""<!DOCTYPE html>
       } else {
         rec.textContent = '';
       }
+
+      /* ---- Training panel ---- */
+      var steps   = d.train_steps    || 0;
+      var sp      = d.selfplay_games || 0;
+      var loss    = d.last_loss;
+      var lossH   = d.loss_history   || [];
+      var bf      = d.buffer_fill    || 0;
+      var bc      = d.buffer_cap     || 1000000;
+      var elo     = d.ladder_elo     || 1500;
+      var eloH    = d.elo_history    || [];
+
+      /* Stat boxes */
+      var lossSpk = lossH.length >= 3
+        ? '<div class="tp-spk">' + sparkline(lossH, 110, 24, '#888') + '</div>'
+        : '';
+      var lossStr = (loss !== null && loss !== undefined) ? loss.toFixed(4) : '&mdash;';
+      var ts = document.getElementById('tp-stats');
+      if (ts) ts.innerHTML =
+        '<div class="tp-box"><div class="tp-lbl">Self-Play Games</div>' +
+          '<div class="tp-val">' + fmtNum(sp) + '</div></div>' +
+        '<div class="tp-box"><div class="tp-lbl">Training Steps</div>' +
+          '<div class="tp-val">' + fmtNum(steps) + '</div></div>' +
+        '<div class="tp-box"><div class="tp-lbl">Loss</div>' +
+          '<div class="tp-val">' + lossStr + '</div>' + lossSpk + '</div>';
+
+      /* Buffer bar */
+      var pct = Math.min(100, bc > 0 ? Math.round(bf / bc * 100) : 0);
+      var bfEl = document.getElementById('tp-buf-fill');
+      if (bfEl) bfEl.style.width = pct + '%';
+      var biEl = document.getElementById('tp-buf-info');
+      if (biEl) biEl.textContent = pct + '% — ' + fmtNum(bf) + ' / ' + fmtNum(bc) + ' positions';
+
+      /* ELO number + delta */
+      var eloEl = document.getElementById('tp-elo-num');
+      if (eloEl) eloEl.textContent = Math.round(elo);
+      var deltaEl = document.getElementById('tp-elo-delta');
+      if (deltaEl && eloH.length >= 2) {
+        var delta = elo - eloH[eloH.length - 2];
+        var dClass = delta > 0.5 ? 'elo-up' : (delta < -0.5 ? 'elo-dn' : 'elo-flat');
+        var dStr = delta > 0 ? '+' + delta.toFixed(0) : delta.toFixed(0);
+        deltaEl.innerHTML = '<span class="' + dClass + '">' + dStr + ' from last match</span>';
+      } else if (deltaEl) {
+        deltaEl.textContent = '';
+      }
+
+      /* ELO chart */
+      var chartEl = document.getElementById('tp-elo-chart');
+      if (chartEl) {
+        if (eloH.length >= 2) {
+          chartEl.innerHTML = sparkline(eloH, 400, 60, '#c89b3c');
+        } else {
+          chartEl.innerHTML = '<div class="spk-empty">Populates after first ladder match</div>';
+        }
+      }
+    }
+
+    function forceGame() {
+      var btn = document.getElementById('force-btn');
+      btn.disabled = true;
+      btn.textContent = 'Sending…';
+      fetch('/api/force-game', {method:'POST'})
+        .then(function(r){ return r.json(); })
+        .then(function(d) {
+          btn.textContent = d.ok ? '✓ Challenge sent!' : '✗ Failed';
+          setTimeout(function(){
+            btn.disabled = false;
+            btn.innerHTML = '&#9654; Play One Game';
+          }, 3000);
+        }).catch(function(){
+          btn.textContent = 'Error';
+          setTimeout(function(){
+            btn.disabled = false;
+            btn.innerHTML = '&#9654; Play One Game';
+          }, 3000);
+        });
     }
 
     function tick() {
@@ -360,6 +529,59 @@ def update_record(wins: int, losses: int, draws: int) -> None:
         _state["total_draws"] = draws
 
 
+def update_training_stats(
+    steps: int,
+    loss: float,
+    buffer_fill: int,
+    buffer_cap: int,
+    selfplay_games: int,
+) -> None:
+    """Called after each training step to push stats to the web viewer."""
+    with _lock:
+        _state["train_steps"] = steps
+        _state["last_loss"] = round(loss, 6)
+        _state["buffer_fill"] = buffer_fill
+        _state["buffer_cap"] = buffer_cap
+        _state["selfplay_games"] = selfplay_games
+        hist = _state["loss_history"]
+        hist.append(round(loss, 6))
+        if len(hist) > 50:
+            del hist[:-50]
+
+
+def update_elo(elo: float) -> None:
+    """Called after each ladder match to record the new internal ELO."""
+    with _lock:
+        _state["ladder_elo"] = round(elo, 1)
+        hist = _state["elo_history"]
+        hist.append(round(elo, 1))
+        if len(hist) > 40:
+            del hist[:-40]
+
+
+def set_force_game_callback(fn) -> None:
+    """Register a callable invoked when the 'Play One Game' button is pressed."""
+    global _force_game_callback
+    _force_game_callback = fn
+
+
+def load_elo_history() -> None:
+    """Seed elo_history from the DB ladder table on startup."""
+    try:
+        from ouroboros.persistence import get_db
+        with get_db() as conn:
+            rows = conn.execute(
+                "SELECT elo FROM ladder ORDER BY id ASC"
+            ).fetchall()
+        elos = [round(float(r["elo"]), 1) for r in rows]
+        with _lock:
+            _state["elo_history"] = elos[-40:]
+            if elos:
+                _state["ladder_elo"] = elos[-1]
+    except Exception as e:
+        log.debug("load_elo_history: %s", e)
+
+
 def _snapshot() -> bytes:
     with _lock:
         return json.dumps(_state).encode()
@@ -368,6 +590,21 @@ def _snapshot() -> bytes:
 class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
+
+    def do_POST(self):
+        if self.path == "/api/force-game":
+            cb = _force_game_callback
+            if cb is not None:
+                try:
+                    cb()
+                    self._send(200, "application/json", b'{"ok":true}')
+                except Exception as e:
+                    log.warning("force-game callback failed: %s", e)
+                    self._send(500, "application/json", b'{"ok":false}')
+            else:
+                self._send(503, "application/json", b'{"ok":false,"error":"not_configured"}')
+        else:
+            self._send(404, "text/plain", b"not found")
 
     def do_GET(self):
         if self.path.startswith("/api/state"):

@@ -47,6 +47,13 @@ class Matchmaker:
         if self._thread:
             self._thread.join(timeout=10)
 
+    def challenge_once(self) -> None:
+        """Run exactly one challenge cycle immediately (used by force-game button)."""
+        try:
+            self._cycle()
+        except Exception as e:
+            log.error("challenge_once error: %s", e, exc_info=True)
+
     def _loop(self) -> None:
         while not self._stop_event.wait(CHALLENGE_INTERVAL):
             try:
