@@ -86,6 +86,7 @@ def run_auto(cfg: dict) -> None:
     from ouroboros import status as st
     from ouroboros.sync import pull_latest, PeriodicSync
     from ouroboros.web_viewer import update_game
+    from ouroboros.scheduler import PlayScheduler
 
     log = logging.getLogger(__name__)
 
@@ -135,7 +136,8 @@ def run_auto(cfg: dict) -> None:
     # Start everything
     sp_manager.start()
     trainer.start_background(status_fn=_update_status)
-    matchmaker.start()
+    play_scheduler = PlayScheduler(matchmaker)
+    play_scheduler.start()   # starts in Lichess mode; matchmaker started inside
     periodic_sync = PeriodicSync(cfg, interval_minutes=15)
     periodic_sync.start()
 
@@ -148,6 +150,7 @@ def run_auto(cfg: dict) -> None:
     def _on_signal(sig, frame):
         log.info("Shutdown signal received; stopping...")
         event_loop.stop()
+        play_scheduler.stop()
         matchmaker.stop()
         trainer.stop()
         sp_manager.stop()
@@ -287,8 +290,8 @@ def main() -> None:
     setup_logging(level=_logging.DEBUG if args.debug else _logging.INFO)
     log = _logging.getLogger(__name__)
 
-    # Start the spectator web server immediately -- before any setup that might
-    # take time -- so Railway health checks pass from the first second.
+    # Start the spectator web server immediately — before any setup that might
+    # take time — so Railway health checks pass from the first second.
     _viewer = None
     if os.environ.get("LICHESS_TOKEN") and os.environ.get("PORT"):
         try:
@@ -303,7 +306,7 @@ def main() -> None:
     for d in ["data", "data/models", "data/buffer", "data/logs"]:
         Path(d).mkdir(parents=True, exist_ok=True)
 
-    # Always init DB on boot -- /tmp is wiped on container restart so tables
+    # Always init DB on boot — /tmp is wiped on container restart so tables
     # must be recreated even when config.json already exists on the volume.
     from ouroboros.persistence import init_db
     init_db()

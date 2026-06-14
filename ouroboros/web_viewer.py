@@ -4,6 +4,7 @@ Serves a single HTML page with:
 - Live chess board rendered from FEN (polls our own API, always current)
 - Player usernames + colors shown during active game
 - Revenge vs random match label
+- Current play mode (Lichess / Selfplay) with countdown to next switch
 - Countdown to the next bot challenge
 - Running win/loss/draw record
 
@@ -35,6 +36,9 @@ _state: dict = {
     "total_wins": 0,
     "total_losses": 0,
     "total_draws": 0,
+    # Mode scheduling
+    "play_mode": "lichess",     # "lichess" or "selfplay"
+    "mode_switch_at": None,     # Unix timestamp of next mode switch
 }
 
 _HTML = b"""<!DOCTYPE html>
@@ -49,7 +53,12 @@ _HTML = b"""<!DOCTYPE html>
          min-height:100vh;display:flex;flex-direction:column;align-items:center;
          padding:28px 16px;gap:0}
     h1{color:#c89b3c;font-size:2rem;letter-spacing:3px;margin-bottom:4px}
-    #sub{color:#666;font-size:.85rem;margin-bottom:18px}
+    #sub{color:#666;font-size:.85rem;margin-bottom:10px}
+    #mode-row{font-size:.82rem;margin-bottom:14px;letter-spacing:.5px;
+              display:flex;gap:8px;align-items:center}
+    .ml{color:#6fcf6f;font-weight:700}
+    .ms{color:#c89b3c;font-weight:700}
+    .msw{color:#777;font-size:.78rem}
     #wrap{width:820px;max-width:96%}
     #badge-row{min-height:24px;margin-bottom:6px;display:flex;align-items:center;gap:8px}
     .badge{display:inline-block;padding:3px 11px;border-radius:12px;
@@ -92,6 +101,7 @@ _HTML = b"""<!DOCTYPE html>
 <body>
   <h1>&#9820; OUROBOROS</h1>
   <p id="sub">self-learning chess bot &mdash; live spectator</p>
+  <div id="mode-row"></div>
   <div id="wrap">
     <div id="badge-row"></div>
     <div id="matchup"></div>
@@ -119,12 +129,52 @@ _HTML = b"""<!DOCTYPE html>
     var nextChalAt = null;
     var lastState  = null;
 
+    /* Per-second tick: challenge countdown + mode-row */
+    setInterval(function() {
+      var now = Date.now() / 1000;
+
+      /* Challenge countdown (only in Lichess mode, not during a game) */
+      var el = document.getElementById('countdown');
+      if (el) {
+        var inLichess = !lastState || (lastState.play_mode || 'lichess') === 'lichess';
+        if (!inLichess || (lastState && lastState.game_id)) {
+          el.textContent = '';
+        } else if (!nextChalAt) {
+          el.textContent = '';
+        } else {
+          var rem = Math.max(0, Math.round(nextChalAt - now));
+          if (rem === 0) el.textContent = 'Challenge sent!';
+          else {
+            var m = Math.floor(rem / 60), s = rem % 60;
+            el.textContent = 'Next challenge in: ' + m + ':' + (s < 10 ? '0' : '') + s;
+          }
+        }
+      }
+
+      /* Mode row */
+      var mEl = document.getElementById('mode-row');
+      if (mEl && lastState) {
+        var mode = lastState.play_mode || 'lichess';
+        var isL  = (mode === 'lichess');
+        var badge = isL ? '<span class="ml">&#9679; LICHESS</span>'
+                        : '<span class="ms">&#9651; SELFPLAY</span>';
+        var sw = lastState.mode_switch_at || 0;
+        var swStr = '';
+        if (sw > 0) {
+          var rem2 = Math.max(0, Math.round(sw - now));
+          var m2 = Math.floor(rem2 / 60), s2 = rem2 % 60;
+          swStr = '<span class="msw">&middot; switch in ' +
+                  m2 + ':' + (s2 < 10 ? '0' : '') + s2 + '</span>';
+        }
+        mEl.innerHTML = badge + (swStr ? ' ' + swStr : '');
+      }
+    }, 1000);
+
     function renderBoard(fen, color) {
       var pos = (fen || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR').split(' ')[0];
       var rows = pos.split('/');
       var flipped = (color === 'black');
 
-      /* Expand each FEN rank to exactly 8 squares */
       var grid = rows.map(function(row) {
         var sq = [];
         for (var i = 0; i < row.length; i++) {
@@ -176,18 +226,6 @@ _HTML = b"""<!DOCTYPE html>
                       .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
 
-    /* Countdown -- runs every second */
-    setInterval(function() {
-      var el = document.getElementById('countdown');
-      if (!el) return;
-      if (lastState && lastState.game_id) { el.textContent = ''; return; }
-      if (!nextChalAt) { el.textContent = ''; return; }
-      var rem = Math.max(0, Math.round(nextChalAt - Date.now() / 1000));
-      if (rem === 0) { el.textContent = 'Challenge sent!'; return; }
-      var m = Math.floor(rem / 60), s = rem % 60;
-      el.textContent = 'Next challenge in: ' + m + ':' + (s < 10 ? '0' : '') + s;
-    }, 1000);
-
     function render(d) {
       var liveId = d.game_id      || null;
       var lastId = d.last_game_id || null;
@@ -201,7 +239,7 @@ _HTML = b"""<!DOCTYPE html>
 
       if (d.next_challenge_at) nextChalAt = d.next_challenge_at;
 
-      /* Board: always show current FEN from our API */
+      /* Board */
       if (liveId)      showBoard(fen, ourCol);
       else if (lastId) showBoard(fen, null);
       else             showIdle();
@@ -296,6 +334,13 @@ def update_fen(fen: str) -> None:
     """Update the current board position after each move."""
     with _lock:
         _state["current_fen"] = fen
+
+
+def update_play_mode(mode: str, switch_at: float) -> None:
+    """Called by PlayScheduler on every mode transition."""
+    with _lock:
+        _state["play_mode"] = mode
+        _state["mode_switch_at"] = switch_at
 
 
 def set_username(username: str) -> None:
