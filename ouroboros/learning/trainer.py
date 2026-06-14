@@ -192,6 +192,11 @@ class Trainer:
             )
             meta_set("ladder_elo", str(new_elo))
             log.info("Internal Elo updated: %.0f → %.0f", prev_elo, new_elo)
+            try:
+                from ouroboros.web_viewer import update_elo
+                update_elo(new_elo)
+            except Exception:
+                pass
 
     def run_loop(self, status_fn=None) -> None:
         """Blocking training loop until stop_event set."""

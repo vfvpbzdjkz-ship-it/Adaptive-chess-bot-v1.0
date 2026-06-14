@@ -48,6 +48,16 @@ class PlayScheduler:
         if self._thread:
             self._thread.join(timeout=5)
 
+    def force_one_game(self) -> None:
+        """Immediately trigger one challenge cycle regardless of current mode.
+
+        The scheduler timer is not reset — selfplay remaining time is preserved.
+        """
+        threading.Thread(
+            target=self._matchmaker.challenge_once, daemon=True
+        ).start()
+        log.info("Force-one-game requested")
+
     def _loop(self) -> None:
         global _lichess_active, _switch_at
         while not self._stop.wait(SLOT_SECONDS):

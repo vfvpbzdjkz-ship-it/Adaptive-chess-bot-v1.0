@@ -85,7 +85,7 @@ def run_auto(cfg: dict) -> None:
     from ouroboros.persistence import meta_get
     from ouroboros import status as st
     from ouroboros.sync import pull_latest, PeriodicSync
-    from ouroboros.web_viewer import update_game
+    from ouroboros.web_viewer import update_game, update_training_stats, load_elo_history, set_force_game_callback
     from ouroboros.scheduler import PlayScheduler
 
     log = logging.getLogger(__name__)
@@ -108,6 +108,9 @@ def run_auto(cfg: dict) -> None:
         ladder_elo=elo,
     )
     st.start(interval=30)
+
+    # Seed ELO history from DB so it shows up immediately on the web viewer
+    load_elo_history()
 
     def on_game_start(game_id: str) -> None:
         log.info("Game started: %s — throttling self-play", game_id)
@@ -132,12 +135,19 @@ def run_auto(cfg: dict) -> None:
             selfplay_games=sp_manager.total_games,
             checkpoint=f"ckpt_{trainer.train_step_count}",
         )
+        try:
+            update_training_stats(
+                steps, loss, buffer.count, buffer.capacity, sp_manager.total_games
+            )
+        except Exception:
+            pass
 
     # Start everything
     sp_manager.start()
     trainer.start_background(status_fn=_update_status)
     play_scheduler = PlayScheduler(matchmaker)
     play_scheduler.start()   # starts in Lichess mode; matchmaker started inside
+    set_force_game_callback(play_scheduler.force_one_game)
     periodic_sync = PeriodicSync(cfg, interval_minutes=15)
     periodic_sync.start()
 
