@@ -496,19 +496,20 @@ _HTML = b"""<!DOCTYPE html>
       }
     }
 
+    /* innerHTML + HTML entities: no non-ASCII anywhere in the byte literal */
     function forceGame() {
       if (_forcePending) return;
       _forcePending = true;
       var btn = document.getElementById('force-btn');
       btn.disabled = true;
-      btn.textContent = 'Sending\\u2026';
+      btn.innerHTML = 'Sending&hellip;';
       fetch('/api/force-game', {method:'POST'})
         .then(function(r){ return r.json(); })
         .then(function(d) {
-          btn.textContent = d.ok ? '\\u2713 Challenge sent!' : '\\u2717 Failed';
+          btn.innerHTML = d.ok ? '&#10003; Challenge sent!' : '&#10007; Failed';
           setTimeout(function(){ _forcePending = false; }, 3000);
         }).catch(function(){
-          btn.textContent = 'Error';
+          btn.innerHTML = 'Error';
           setTimeout(function(){ _forcePending = false; }, 3000);
         });
     }
