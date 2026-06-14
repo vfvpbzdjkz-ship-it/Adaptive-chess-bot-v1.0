@@ -91,9 +91,12 @@ _HTML = b"""<!DOCTYPE html>
                 box-shadow:0 4px 24px rgba(0,0,0,.6)}
     .sq{aspect-ratio:1;display:flex;align-items:center;justify-content:center}
     .sql{background:#f0d9b5}.sqd{background:#b58863}
-    .pw,.pb{font-size:min(64px,10.5vw);line-height:1;user-select:none}
-    .pw{color:#fff;text-shadow:0 0 4px #000,0 0 4px #000}
-    .pb{color:#111}
+    .sq-from{background:#f6f669 !important}
+    .sq-to{background:#cdd26a !important}
+    .piece-img{width:88%;height:88%;object-fit:contain;display:block;
+               pointer-events:none;user-select:none;-webkit-user-select:none}
+    @keyframes piecein{from{opacity:.2;transform:scale(.7)}to{opacity:1;transform:scale(1)}}
+    .piece-new{animation:piecein .18s ease-out}
     #idle{text-align:center;padding:60px 20px}
     .pulse{animation:p 2s ease-in-out infinite}
     @keyframes p{0%,100%{opacity:1}50%{opacity:.3}}
@@ -187,18 +190,18 @@ _HTML = b"""<!DOCTYPE html>
     </div>
   </div>
   <script>
-    /* Unicode chess pieces (white / black) */
-    var WP = {
-      'K':'\\u2654','Q':'\\u2655','R':'\\u2656','B':'\\u2657','N':'\\u2658','P':'\\u2659'
-    };
-    var BP = {
-      'k':'\\u265a','q':'\\u265b','r':'\\u265c','b':'\\u265d','n':'\\u265e','p':'\\u265f'
+    /* Lichess CBurnett piece images served from CDN */
+    var CDN = 'https://lichess1.org/assets/piece/cburnett/';
+    var PIECES = {
+      'K':'wK','Q':'wQ','R':'wR','B':'wB','N':'wN','P':'wP',
+      'k':'bK','q':'bQ','r':'bR','b':'bB','n':'bN','p':'bP'
     };
 
     var shownFen   = null;
     var shownColor = null;
     var nextChalAt = null;
     var lastState  = null;
+    var _forcePending = false;
 
     /* Per-second tick: challenge countdown + mode-row */
     setInterval(function() {
@@ -241,7 +244,40 @@ _HTML = b"""<!DOCTYPE html>
       }
     }, 1000);
 
-    function renderBoard(fen, color) {
+    /* Parse FEN position into 8x8 grid (row 0 = rank 8, row 7 = rank 1) */
+    function fenToGrid(fen) {
+      var pos = (fen || '').split(' ')[0];
+      var rows = pos.split('/');
+      var grid = [];
+      for (var r = 0; r < rows.length; r++) {
+        var row = [];
+        for (var i = 0; i < rows[r].length; i++) {
+          var ch = rows[r][i];
+          if (ch >= '1' && ch <= '8') { for (var j = 0; j < +ch; j++) row.push(''); }
+          else row.push(ch);
+        }
+        grid.push(row);
+      }
+      return grid;
+    }
+
+    /* Diff two FENs; returns {from:[], to:[]} in FEN grid coords */
+    function findChangedSqs(fen1, fen2) {
+      if (!fen1 || !fen2) return {from:[], to:[]};
+      var g1 = fenToGrid(fen1), g2 = fenToGrid(fen2);
+      var from = [], to = [];
+      for (var r = 0; r < 8; r++) {
+        for (var c = 0; c < 8; c++) {
+          var p1 = (g1[r] && g1[r][c]) || '';
+          var p2 = (g2[r] && g2[r][c]) || '';
+          if (p1 !== '' && p2 === '') from.push(r + ',' + c);
+          else if (p1 !== p2 && p2 !== '') to.push(r + ',' + c);
+        }
+      }
+      return {from: from, to: to};
+    }
+
+    function renderBoard(fen, color, fromSqs, toSqs) {
       var pos = (fen || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR').split(' ')[0];
       var rows = pos.split('/');
       var flipped = (color === 'black');
@@ -261,18 +297,30 @@ _HTML = b"""<!DOCTYPE html>
         grid = grid.map(function(r) { return r.slice().reverse(); });
       }
 
+      var fromSet = {}, toSet = {};
+      (fromSqs || []).forEach(function(k){ fromSet[k] = 1; });
+      (toSqs   || []).forEach(function(k){ toSet[k]   = 1; });
+
       var html = '<div class="chessboard">';
       for (var r = 0; r < 8; r++) {
         for (var c = 0; c < 8; c++) {
           var rank = flipped ? r + 1 : 8 - r;
           var file = flipped ? 7 - c : c;
           var light = (rank + file) % 2 === 0;
+          /* Map visual (r,c) back to FEN grid coords for highlight lookup */
+          var fenRow = flipped ? 7 - r : r;
+          var fenCol = flipped ? 7 - c : c;
+          var sqKey  = fenRow + ',' + fenCol;
+          var hlCls  = fromSet[sqKey] ? ' sq-from' : (toSet[sqKey] ? ' sq-to' : '');
+          var isNew  = !!toSet[sqKey];
           var p = grid[r][c];
-          html += '<div class="sq ' + (light ? 'sql' : 'sqd') + '">';
+          html += '<div class="sq ' + (light ? 'sql' : 'sqd') + hlCls + '">';
           if (p) {
-            var isW = (p === p.toUpperCase());
-            html += '<span class="' + (isW ? 'pw' : 'pb') + '">' +
-                    (isW ? (WP[p]||'') : (BP[p.toLowerCase()]||'')) + '</span>';
+            var pn = PIECES[p] || '';
+            if (pn) {
+              html += '<img class="piece-img' + (isNew ? ' piece-new' : '') +
+                      '" src="' + CDN + pn + '.svg" draggable="false" alt="' + p + '">';
+            }
           }
           html += '</div>';
         }
@@ -282,8 +330,9 @@ _HTML = b"""<!DOCTYPE html>
 
     function showBoard(fen, color) {
       if (fen === shownFen && color === shownColor) return;
+      var chg = findChangedSqs(shownFen, fen);
       shownFen = fen; shownColor = color;
-      document.getElementById('board').innerHTML = renderBoard(fen, color);
+      document.getElementById('board').innerHTML = renderBoard(fen, color, chg.from, chg.to);
     }
 
     function showIdle() {
@@ -312,7 +361,6 @@ _HTML = b"""<!DOCTYPE html>
         var y = ((1 - (v - mn) / rng) * h).toFixed(1);
         return x + ',' + y;
       }).join(' ');
-      /* last value dot */
       var lx = w, ly = ((1-(vals[vals.length-1]-mn)/rng)*h).toFixed(1);
       return '<svg width="'+w+'" height="'+h+'" viewBox="0 0 '+w+' '+h+'" style="display:block;overflow:visible">' +
         '<polyline points="'+pts+'" fill="none" stroke="'+col+'" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>' +
@@ -381,6 +429,18 @@ _HTML = b"""<!DOCTYPE html>
         rec.textContent = '';
       }
 
+      /* Force-game button -- only update when no pending challenge in flight */
+      var btn = document.getElementById('force-btn');
+      if (btn && !_forcePending) {
+        if (liveId) {
+          btn.disabled = true;
+          btn.innerHTML = '&#9632; In Game';
+        } else {
+          btn.disabled = false;
+          btn.innerHTML = '&#9654; Play One Game';
+        }
+      }
+
       /* ---- Training panel ---- */
       var steps   = d.train_steps    || 0;
       var sp      = d.selfplay_games || 0;
@@ -437,23 +497,19 @@ _HTML = b"""<!DOCTYPE html>
     }
 
     function forceGame() {
+      if (_forcePending) return;
+      _forcePending = true;
       var btn = document.getElementById('force-btn');
       btn.disabled = true;
-      btn.textContent = 'Sending\u2026';
+      btn.textContent = 'Sending\\u2026';
       fetch('/api/force-game', {method:'POST'})
         .then(function(r){ return r.json(); })
         .then(function(d) {
           btn.textContent = d.ok ? '\\u2713 Challenge sent!' : '\\u2717 Failed';
-          setTimeout(function(){
-            btn.disabled = false;
-            btn.innerHTML = '&#9654; Play One Game';
-          }, 3000);
+          setTimeout(function(){ _forcePending = false; }, 3000);
         }).catch(function(){
           btn.textContent = 'Error';
-          setTimeout(function(){
-            btn.disabled = false;
-            btn.innerHTML = '&#9654; Play One Game';
-          }, 3000);
+          setTimeout(function(){ _forcePending = false; }, 3000);
         });
     }
 
@@ -592,6 +648,9 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
     def do_POST(self):
+        content_length = int(self.headers.get("Content-Length", 0))
+        if content_length > 0:
+            self.rfile.read(content_length)
         if self.path == "/api/force-game":
             cb = _force_game_callback
             if cb is not None:
