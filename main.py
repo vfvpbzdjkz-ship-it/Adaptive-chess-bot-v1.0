@@ -115,17 +115,17 @@ def run_auto(cfg: dict) -> None:
     def on_game_start(game_id: str) -> None:
         log.info("Game started: %s — throttling self-play", game_id)
         sp_manager.throttle(True)
+        matchmaker.set_in_game(True)
         st.update(live_game=game_id)
         update_game(game_id)
 
-    def on_game_finish(game_id: str, result, opp_username, opp_elo, opp_is_bot) -> None:
-        log.info("Game %s finished: %s vs %s", game_id, result, opp_username)
+    def on_game_finish(game_id: str, result, opp_username, opp_elo, opp_is_bot, our_color: str = "white") -> None:
+        log.info("Game %s finished: %s vs %s (we played %s)", game_id, result, opp_username, our_color)
         sp_manager.throttle(False)
+        matchmaker.set_in_game(False)
         st.update(live_game=None, lichess_games=st._state.get("lichess_games", 0) + 1)
         update_game(None)
-        # Note: online.py is called from game.py pipeline via events;
-        # here we handle PGN retrieval for full processing
-        _fetch_and_process_game(client, buffer, game_id, result, opp_username, opp_elo, opp_is_bot, cfg)
+        _fetch_and_process_game(client, buffer, game_id, result, opp_username, opp_elo, opp_is_bot, cfg, our_color)
 
     def _update_status(steps: int, loss: float) -> None:
         st.update(
@@ -258,7 +258,8 @@ def run_train(cfg: dict) -> None:
 
 
 def _fetch_and_process_game(
-    client, buffer, game_id: str, result, opp_username, opp_elo, opp_is_bot, cfg
+    client, buffer, game_id: str, result, opp_username, opp_elo, opp_is_bot, cfg,
+    our_color: str = "white",
 ) -> None:
     """Fetch completed game PGN from Lichess and process it."""
     import logging
@@ -275,7 +276,6 @@ def _fetch_and_process_game(
         )
         if resp.status_code == 200:
             pgn = resp.text
-            our_color = "white"  # We determine color from game record; simplified here
             from ouroboros.learning.online import process_finished_game
             process_finished_game(
                 buffer=buffer,
@@ -287,6 +287,8 @@ def _fetch_and_process_game(
                 opponent_elo=opp_elo,
                 opponent_is_bot=opp_is_bot,
             )
+        else:
+            log.warning("Could not fetch PGN for game %s (HTTP %d)", game_id, resp.status_code)
     except Exception as e:
         log.warning("Could not fetch/process game %s: %s", game_id, e)
 

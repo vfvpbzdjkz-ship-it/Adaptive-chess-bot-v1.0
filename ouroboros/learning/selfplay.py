@@ -20,9 +20,9 @@ from ouroboros.learning.buffer import ReplayBuffer, SOURCE_SELFPLAY
 log = logging.getLogger(__name__)
 
 TEMP_PLIES = 30       # τ=1.0 for first N plies, then argmax
-RESIGN_THRESHOLD = -0.92
-RESIGN_CONSECUTIVE = 8
-RESIGN_AUDIT_FRACTION = 0.05
+RESIGN_THRESHOLD = -0.90
+RESIGN_CONSECUTIVE = 5
+RESIGN_AUDIT_FRACTION = 0.10  # audit 10% of games without resignation for learning
 
 
 def _play_game(
