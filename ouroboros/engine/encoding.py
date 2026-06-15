@@ -1,16 +1,28 @@
-"""Board → tensor encoding and move ↔ policy-index mapping.
+"""Board -> tensor encoding and move <-> policy-index mapping.
 
-AlphaZero-style: 8×8×19 input planes, 8×8×73 policy space (4672 total).
+AlphaZero-style: 8x8x19 input planes, 8x8x73 policy space (4672 total).
 All indices are in the side-to-move frame (board flipped if Black to move).
 """
 import chess
 import numpy as np
 import torch
 
-# ── Policy index layout (per from-square, 73 planes) ──────────────────────────
-# [0..55]  queen-style: 8 directions × 7 distances
+# Optional native acceleration (built from rust_ext/). The pure-Python
+# implementations below remain the source of truth and the guaranteed fallback;
+# the native module only replaces the hot inner loops and is validated to
+# produce byte-identical output. If it is missing (e.g. the Rust build was
+# skipped), everything still works.
+try:
+    import ouroboros_native as _native
+    HAS_NATIVE = True
+except Exception:  # pragma: no cover - depends on build environment
+    _native = None
+    HAS_NATIVE = False
+
+# -- Policy index layout (per from-square, 73 planes) --------------------------
+# [0..55]  queen-style: 8 directions x 7 distances
 # [56..63] knight moves: 8 deltas
-# [64..72] underpromotions: 3 pieces × 3 directions (fwd, cap-L, cap-R)
+# [64..72] underpromotions: 3 pieces x 3 directions (fwd, cap-L, cap-R)
 #          pieces: N=0, B=1, R=2
 
 _QUEEN_DIRS = [(-1, 0), (1, 0), (0, -1), (0, 1),
@@ -18,11 +30,11 @@ _QUEEN_DIRS = [(-1, 0), (1, 0), (0, -1), (0, 1),
 _KNIGHT_DELTAS = [(-2, -1), (-2, 1), (-1, -2), (-1, 2),
                   (1, -2), (1, 2), (2, -1), (2, 1)]
 
-POLICY_SIZE = 4672  # 64 × 73
+POLICY_SIZE = 4672  # 64 x 73
 
 
 def _queen_plane(direction_idx: int, distance: int) -> int:
-    """direction_idx ∈ [0,7], distance ∈ [1,7] → plane ∈ [0,55]"""
+    """direction_idx in [0,7], distance in [1,7] -> plane in [0,55]"""
     return direction_idx * 7 + (distance - 1)
 
 
@@ -43,9 +55,22 @@ def move_to_index(board: chess.Board, move: chess.Move) -> int:
     """Map a legal move to a policy index [0, 4671].
 
     Always uses the side-to-move frame: if Black to move the board is viewed
-    as if flipped (rank 0 ↔ rank 7), so the side to move always attacks
+    as if flipped (rank 0 <-> rank 7), so the side to move always attacks
     'upward' (increasing rank).
     """
+    if HAS_NATIVE:
+        idx = _native.move_to_index(
+            move.from_square, move.to_square, move.promotion or 0,
+            board.turn == chess.BLACK,
+        )
+        if idx < 0:
+            raise ValueError(f"Cannot encode move {move} on board\n{board}")
+        return idx
+    return _py_move_to_index(board, move)
+
+
+def _py_move_to_index(board: chess.Board, move: chess.Move) -> int:
+    """Pure-Python reference for move_to_index (fallback + source of truth)."""
     flip = board.turn == chess.BLACK
 
     from_sq = move.from_square
@@ -156,17 +181,37 @@ def index_to_move(board: chess.Board, idx: int) -> chess.Move:
 
 def legal_move_mask(board: chess.Board) -> np.ndarray:
     """Return a bool mask of shape (4672,) with True at legal move indices."""
+    if HAS_NATIVE:
+        froms: list[int] = []
+        tos: list[int] = []
+        promos: list[int] = []
+        for move in board.legal_moves:
+            froms.append(move.from_square)
+            tos.append(move.to_square)
+            promos.append(move.promotion or 0)
+        mask = np.zeros(POLICY_SIZE, dtype=np.bool_)
+        if froms:
+            idxs = _native.legal_indices(froms, tos, promos, board.turn == chess.BLACK)
+            for idx in idxs:
+                if idx >= 0:
+                    mask[idx] = True
+        return mask
+    return _py_legal_move_mask(board)
+
+
+def _py_legal_move_mask(board: chess.Board) -> np.ndarray:
+    """Pure-Python reference for legal_move_mask (fallback + source of truth)."""
     mask = np.zeros(POLICY_SIZE, dtype=np.bool_)
     for move in board.legal_moves:
         try:
-            idx = move_to_index(board, move)
+            idx = _py_move_to_index(board, move)
             mask[idx] = True
         except ValueError:
             pass
     return mask
 
 
-# ── Board → tensor planes ──────────────────────────────────────────────────────
+# -- Board -> tensor planes ----------------------------------------------------
 _PIECE_ORDER = [chess.PAWN, chess.KNIGHT, chess.BISHOP,
                 chess.ROOK, chess.QUEEN, chess.KING]
 
@@ -176,6 +221,42 @@ def board_to_tensor(board: chess.Board) -> torch.Tensor:
 
     Always from the side-to-move's perspective.
     """
+    if HAS_NATIVE:
+        return _native_board_to_tensor(board)
+    return _py_board_to_tensor(board)
+
+
+def _native_board_to_tensor(board: chess.Board) -> torch.Tensor:
+    """Native-backed board encoding. python-chess supplies the bitboards and
+    rule-dependent flags; the native module fills the plane buffer."""
+    own_color = board.turn
+    opp_color = not own_color
+    flip = board.turn == chess.BLACK
+
+    own = [board.pieces_mask(pt, own_color) for pt in _PIECE_ORDER]
+    opp = [board.pieces_mask(pt, opp_color) for pt in _PIECE_ORDER]
+
+    cr = board.castling_rights
+    if board.turn == chess.WHITE:
+        castle = [bool(cr & chess.BB_H1), bool(cr & chess.BB_A1),
+                  bool(cr & chess.BB_H8), bool(cr & chess.BB_A8)]
+    else:
+        castle = [bool(cr & chess.BB_H8), bool(cr & chess.BB_A8),
+                  bool(cr & chess.BB_H1), bool(cr & chess.BB_A1)]
+
+    ep_file = chess.square_file(board.ep_square) if board.ep_square is not None else -1
+    halfmove = min(board.halfmove_clock / 100.0, 1.0)
+    repetition = board.is_repetition(2)
+
+    buf = _native.board_to_planes(
+        own, opp, castle, ep_file, float(halfmove), repetition, flip,
+    )
+    planes = np.frombuffer(buf, dtype="<f4").reshape(19, 8, 8).copy()
+    return torch.from_numpy(planes)
+
+
+def _py_board_to_tensor(board: chess.Board) -> torch.Tensor:
+    """Pure-Python reference for board_to_tensor (fallback + source of truth)."""
     flip = board.turn == chess.BLACK
     planes = np.zeros((19, 8, 8), dtype=np.float32)
 

@@ -44,13 +44,24 @@ _state: dict = {
     # Training & self-play stats
     "train_steps": 0,
     "last_loss": None,
+    "policy_loss": None,
+    "value_loss": None,
     "buffer_fill": 0,
     "buffer_cap": 1_000_000,
     "selfplay_games": 0,
     "ladder_elo": 1500.0,
-    "loss_history": [],         # last 50 loss values for sparkline
+    "loss_history": [],         # last 50 total-loss values for sparkline
+    "ploss_history": [],        # last 50 policy-loss values
+    "vloss_history": [],        # last 50 value-loss values
     "elo_history": [],          # ELO after each ladder match
+    "steps_per_min": 0.0,       # recent training throughput
+    "buffer_sources": {"selfplay": 0, "live": 0, "imitation": 0},
+    "has_native": None,         # True/False once known; None = unknown
 }
+
+# Rolling (timestamp, step) samples for the steps/min estimate. Kept out of
+# _state so it is not serialised to the API.
+_step_samples: list = []
 
 _HTML = b"""<!DOCTYPE html>
 <html lang="en">
@@ -148,11 +159,26 @@ _HTML = b"""<!DOCTYPE html>
     .spk-lbl{color:#555;font-size:.67rem;letter-spacing:.5px;
              text-transform:uppercase;margin-bottom:6px}
     .spk-empty{color:#555;font-size:.73rem;font-style:italic;padding-top:8px}
+    /* Native-backend badge */
+    .nat-badge{font-size:.6rem;font-weight:700;letter-spacing:1px;
+               padding:2px 7px;border-radius:8px;margin-left:8px;vertical-align:middle}
+    .nat-on{background:#13361f;color:#6fcf6f;border:1px solid #2f6f3f}
+    .nat-off{background:#33240f;color:#c89b3c;border:1px solid #6f5520}
+    /* Data-composition bar */
+    .comp-track{display:flex;height:10px;border-radius:4px;overflow:hidden;
+                background:#1e1e3a;margin-top:6px}
+    .comp-seg{height:100%;transition:width .6s ease}
+    .comp-sp{background:#5a8fd6}.comp-live{background:#c89b3c}.comp-imit{background:#9b6fcf}
+    .comp-legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:7px;
+                 font-size:.7rem;color:#aaa}
+    .comp-dot{display:inline-block;width:9px;height:9px;border-radius:2px;
+              margin-right:5px;vertical-align:middle}
+    .winrate{color:#6fcf6f;font-weight:600}
   </style>
 </head>
 <body>
   <h1>&#9820; OUROBOROS</h1>
-  <p id="sub">self-learning chess bot &mdash; live spectator</p>
+  <p id="sub">self-learning chess bot &mdash; live spectator<span id="native-badge"></span></p>
   <div id="mode-row"></div>
   <div id="wrap">
     <div id="badge-row"></div>
@@ -177,6 +203,9 @@ _HTML = b"""<!DOCTYPE html>
     <div class="buf-lbl">REPLAY BUFFER</div>
     <div class="buf-track"><div class="buf-fill" id="tp-buf-fill" style="width:0%"></div></div>
     <div class="buf-info" id="tp-buf-info"></div>
+    <div class="buf-lbl" style="margin-top:13px">DATA COMPOSITION</div>
+    <div class="comp-track" id="tp-comp"></div>
+    <div class="comp-legend" id="tp-comp-legend"></div>
     <div id="tp-elo">
       <div class="elo-block">
         <div class="elo-lbl">INTERNAL ELO</div>
@@ -381,6 +410,14 @@ _HTML = b"""<!DOCTYPE html>
 
       if (d.next_challenge_at) nextChalAt = d.next_challenge_at;
 
+      /* Native backend badge */
+      var nb = document.getElementById('native-badge');
+      if (nb) {
+        if (d.has_native === true)       nb.innerHTML = '<span class="nat-badge nat-on">RUST</span>';
+        else if (d.has_native === false) nb.innerHTML = '<span class="nat-badge nat-off">PURE PY</span>';
+        else                             nb.innerHTML = '';
+      }
+
       /* Board */
       if (liveId)      showBoard(fen, ourCol);
       else if (lastId) showBoard(fen, null);
@@ -418,13 +455,16 @@ _HTML = b"""<!DOCTYPE html>
         ? '<a href="https://lichess.org/' + viewId + '" target="_blank">Open on Lichess &#x2197;</a>'
         : '';
 
-      /* Record */
+      /* Record + win-rate */
       var rec = document.getElementById('record');
       var w = d.total_wins || 0, dr = d.total_draws || 0, l = d.total_losses || 0;
-      if (w + dr + l > 0) {
+      var played = w + dr + l;
+      if (played > 0) {
+        var wr = Math.round((w + 0.5 * dr) / played * 100);
         rec.innerHTML = 'Record: <span class="rw">' + w + 'W</span>' +
           ' &middot; <span class="rd">' + dr + 'D</span>' +
-          ' &middot; <span class="rl">' + l + 'L</span>';
+          ' &middot; <span class="rl">' + l + 'L</span>' +
+          ' &middot; <span class="winrate">' + wr + '% score</span>';
       } else {
         rec.textContent = '';
       }
@@ -445,25 +485,36 @@ _HTML = b"""<!DOCTYPE html>
       var steps   = d.train_steps    || 0;
       var sp      = d.selfplay_games || 0;
       var loss    = d.last_loss;
+      var ploss   = d.policy_loss;
+      var vloss   = d.value_loss;
       var lossH   = d.loss_history   || [];
+      var plossH  = d.ploss_history  || [];
+      var vlossH  = d.vloss_history  || [];
+      var spm     = d.steps_per_min  || 0;
       var bf      = d.buffer_fill    || 0;
       var bc      = d.buffer_cap     || 1000000;
       var elo     = d.ladder_elo     || 1500;
       var eloH    = d.elo_history    || [];
 
-      /* Stat boxes */
-      var lossSpk = lossH.length >= 3
-        ? '<div class="tp-spk">' + sparkline(lossH, 110, 24, '#888') + '</div>'
-        : '';
-      var lossStr = (loss !== null && loss !== undefined) ? loss.toFixed(4) : '&mdash;';
+      function lossBox(label, val, hist, col) {
+        var spk = hist.length >= 3
+          ? '<div class="tp-spk">' + sparkline(hist, 110, 24, col) + '</div>' : '';
+        var str = (val !== null && val !== undefined) ? val.toFixed(4) : '&mdash;';
+        return '<div class="tp-box"><div class="tp-lbl">' + label + '</div>' +
+               '<div class="tp-val">' + str + '</div>' + spk + '</div>';
+      }
+
       var ts = document.getElementById('tp-stats');
       if (ts) ts.innerHTML =
         '<div class="tp-box"><div class="tp-lbl">Self-Play Games</div>' +
           '<div class="tp-val">' + fmtNum(sp) + '</div></div>' +
         '<div class="tp-box"><div class="tp-lbl">Training Steps</div>' +
           '<div class="tp-val">' + fmtNum(steps) + '</div></div>' +
-        '<div class="tp-box"><div class="tp-lbl">Loss</div>' +
-          '<div class="tp-val">' + lossStr + '</div>' + lossSpk + '</div>';
+        '<div class="tp-box"><div class="tp-lbl">Steps / min</div>' +
+          '<div class="tp-val">' + (spm ? spm.toFixed(1) : '&mdash;') + '</div></div>' +
+        lossBox('Total Loss', loss, lossH, '#888') +
+        lossBox('Policy Loss', ploss, plossH, '#5a8fd6') +
+        lossBox('Value Loss', vloss, vlossH, '#9b6fcf');
 
       /* Buffer bar */
       var pct = Math.min(100, bc > 0 ? Math.round(bf / bc * 100) : 0);
@@ -471,6 +522,30 @@ _HTML = b"""<!DOCTYPE html>
       if (bfEl) bfEl.style.width = pct + '%';
       var biEl = document.getElementById('tp-buf-info');
       if (biEl) biEl.textContent = pct + '% -- ' + fmtNum(bf) + ' / ' + fmtNum(bc) + ' positions';
+
+      /* Data composition bar */
+      var src  = d.buffer_sources || {selfplay:0, live:0, imitation:0};
+      var stot = (src.selfplay || 0) + (src.live || 0) + (src.imitation || 0);
+      var comp = document.getElementById('tp-comp');
+      var leg  = document.getElementById('tp-comp-legend');
+      if (comp && leg) {
+        if (stot > 0) {
+          var ps = src.selfplay / stot * 100;
+          var pl = src.live     / stot * 100;
+          var pi = src.imitation / stot * 100;
+          comp.innerHTML =
+            '<div class="comp-seg comp-sp" style="width:' + ps + '%"></div>' +
+            '<div class="comp-seg comp-live" style="width:' + pl + '%"></div>' +
+            '<div class="comp-seg comp-imit" style="width:' + pi + '%"></div>';
+          leg.innerHTML =
+            '<span><span class="comp-dot comp-sp"></span>Self-play ' + fmtNum(src.selfplay) + '</span>' +
+            '<span><span class="comp-dot comp-live"></span>Lichess ' + fmtNum(src.live) + '</span>' +
+            '<span><span class="comp-dot comp-imit"></span>Imitation ' + fmtNum(src.imitation) + '</span>';
+        } else {
+          comp.innerHTML = '<div class="comp-seg comp-sp" style="width:0%"></div>';
+          leg.innerHTML = '<span style="color:#555;font-style:italic">No training data yet</span>';
+        }
+      }
 
       /* ELO number + delta */
       var eloEl = document.getElementById('tp-elo-num');
@@ -496,7 +571,7 @@ _HTML = b"""<!DOCTYPE html>
       }
     }
 
-    /* Use innerHTML + HTML entities to avoid any non-ASCII in the byte literal */
+    /* innerHTML + HTML entities: no non-ASCII anywhere in the byte literal */
     function forceGame() {
       if (_forcePending) return;
       _forcePending = true;
@@ -592,18 +667,58 @@ def update_training_stats(
     buffer_fill: int,
     buffer_cap: int,
     selfplay_games: int,
+    policy_loss: float = None,
+    value_loss: float = None,
+    source_counts: dict = None,
 ) -> None:
     """Called after each training step to push stats to the web viewer."""
+    import time
+    now = time.time()
     with _lock:
         _state["train_steps"] = steps
         _state["last_loss"] = round(loss, 6)
         _state["buffer_fill"] = buffer_fill
         _state["buffer_cap"] = buffer_cap
         _state["selfplay_games"] = selfplay_games
+
         hist = _state["loss_history"]
         hist.append(round(loss, 6))
         if len(hist) > 50:
             del hist[:-50]
+
+        if policy_loss is not None:
+            _state["policy_loss"] = round(policy_loss, 6)
+            ph = _state["ploss_history"]
+            ph.append(round(policy_loss, 6))
+            if len(ph) > 50:
+                del ph[:-50]
+        if value_loss is not None:
+            _state["value_loss"] = round(value_loss, 6)
+            vh = _state["vloss_history"]
+            vh.append(round(value_loss, 6))
+            if len(vh) > 50:
+                del vh[:-50]
+
+        if source_counts:
+            _state["buffer_sources"] = source_counts
+
+        # Steps/min from a rolling ~60s window of (time, step) samples. Only
+        # report once the window spans a few seconds, so a couple of samples
+        # arriving back-to-back can't produce an absurd rate.
+        _step_samples.append((now, steps))
+        cutoff = now - 60.0
+        while len(_step_samples) > 2 and _step_samples[0][0] < cutoff:
+            _step_samples.pop(0)
+        dt = _step_samples[-1][0] - _step_samples[0][0]
+        ds = _step_samples[-1][1] - _step_samples[0][1]
+        if dt >= 3.0:
+            _state["steps_per_min"] = round(ds / dt * 60.0, 1)
+
+
+def set_native_status(active: bool) -> None:
+    """Record whether the native (Rust) encoding backend is in use."""
+    with _lock:
+        _state["has_native"] = bool(active)
 
 
 def update_elo(elo: float) -> None:
