@@ -85,13 +85,24 @@ def run_auto(cfg: dict) -> None:
     from ouroboros.persistence import meta_get
     from ouroboros import status as st
     from ouroboros.sync import pull_latest, PeriodicSync
-    from ouroboros.web_viewer import update_game, update_training_stats, load_elo_history, set_force_game_callback
+    from ouroboros.web_viewer import (
+        update_game, update_training_stats, load_elo_history,
+        set_force_game_callback, set_native_status,
+    )
     from ouroboros.scheduler import PlayScheduler
 
     log = logging.getLogger(__name__)
 
     # Pull latest weights + DB from HF Hub before loading (no-op if not configured)
     pull_latest(cfg)
+
+    # Surface whether the native (Rust) encoding acceleration is active.
+    try:
+        from ouroboros.engine.encoding import HAS_NATIVE
+        set_native_status(HAS_NATIVE)
+        log.info("Encoding backend: %s", "native (rust)" if HAS_NATIVE else "pure-python")
+    except Exception:
+        pass
 
     net, device = _load_net(cfg)
     client = LichessClient(cfg["lichess_token"])
@@ -127,7 +138,8 @@ def run_auto(cfg: dict) -> None:
         update_game(None)
         _fetch_and_process_game(client, buffer, game_id, result, opp_username, opp_elo, opp_is_bot, cfg, our_color)
 
-    def _update_status(steps: int, loss: float) -> None:
+    def _update_status(steps: int, loss: float,
+                       policy_loss: float = None, value_loss: float = None) -> None:
         st.update(
             train_steps=steps,
             last_loss=loss,
@@ -137,7 +149,9 @@ def run_auto(cfg: dict) -> None:
         )
         try:
             update_training_stats(
-                steps, loss, buffer.count, buffer.capacity, sp_manager.total_games
+                steps, loss, buffer.count, buffer.capacity, sp_manager.total_games,
+                policy_loss=policy_loss, value_loss=value_loss,
+                source_counts=buffer.source_counts(),
             )
         except Exception:
             pass

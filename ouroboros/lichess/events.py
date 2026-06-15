@@ -66,16 +66,19 @@ def _should_accept(challenge: dict, cfg: dict) -> tuple[bool, str]:
             return False, "tooFast"
 
     accept_speeds = set()
-    if cfg.get("accept_blitz", True):
+    if cfg.get("accept_blitz", False):
         accept_speeds.update(["blitz"])
-    if cfg.get("accept_rapid", True):
+    if cfg.get("accept_rapid", False):
         accept_speeds.update(["rapid"])
     if cfg.get("accept_classical", True):
         accept_speeds.update(["classical"])
     if cfg.get("accept_bullet", False):
         accept_speeds.update(["bullet"])
 
-    if speed not in accept_speeds and speed != "correspondence":
+    if speed == "correspondence":
+        if not cfg.get("accept_correspondence", False):
+            return False, "timeControl"
+    elif speed not in accept_speeds:
         return False, "tooFast"
 
     rated = challenge.get("rated", False)

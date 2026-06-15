@@ -67,7 +67,7 @@ class ReplayBuffer:
             actual_bytes = path.stat().st_size
             if actual_bytes == expected_bytes:
                 return np.memmap(str(path), dtype=dtype, mode="r+", shape=shape)
-            # Wrong size — from a failed/resized deployment. Delete and recreate.
+            # Wrong size -- from a failed/resized deployment. Delete and recreate.
             log.warning("Buffer %s: expected %d bytes, found %d; recreating",
                         path.name, expected_bytes, actual_bytes)
             path.unlink()
@@ -158,6 +158,23 @@ class ReplayBuffer:
     def flush(self) -> None:
         with self._lock:
             self._flush_and_save()
+
+    def source_counts(self) -> dict:
+        """Return how many stored positions came from each source.
+
+        Cheap scan of the (uint8) sources array; used by the web viewer to show
+        the composition of the training data.
+        """
+        with self._lock:
+            count = min(self._count, self.capacity)
+        if count == 0:
+            return {"selfplay": 0, "live": 0, "imitation": 0}
+        bc = np.bincount(np.asarray(self._sources[:count]), minlength=3)
+        return {
+            "selfplay": int(bc[SOURCE_SELFPLAY]),
+            "live": int(bc[SOURCE_LICHESS_LIVE]),
+            "imitation": int(bc[SOURCE_OPP_IMITATION]),
+        }
 
     @property
     def count(self) -> int:
