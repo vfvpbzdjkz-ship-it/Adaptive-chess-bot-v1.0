@@ -118,13 +118,16 @@ class EventLoop:
                 break
             etype = event.get("type", "")
 
-            if etype == "challenge":
-                self._handle_challenge(event.get("challenge", {}))
-            elif etype == "gameStart":
-                self._handle_game_start(event.get("game", {}))
-            elif etype == "gameFinish":
-                game_id = event.get("game", {}).get("gameId", "")
-                log.info("Game finished: %s", game_id)
+            try:
+                if etype == "challenge":
+                    self._handle_challenge(event.get("challenge", {}))
+                elif etype == "gameStart":
+                    self._handle_game_start(event.get("game", {}))
+                elif etype == "gameFinish":
+                    game_id = event.get("game", {}).get("gameId", "")
+                    log.info("Game finished: %s", game_id)
+            except Exception as e:
+                log.exception("Unhandled error processing event %r: %s", etype, e)
 
     def _reattach_ongoing(self) -> None:
         ongoing = self.client.get_ongoing_games()
@@ -140,7 +143,10 @@ class EventLoop:
         max_concurrent = self.cfg.get("max_concurrent_games", 1)
 
         if len(self._active_games) >= max_concurrent:
-            self.client.decline_challenge(challenge_id, "later")
+            try:
+                self.client.decline_challenge(challenge_id, "later")
+            except Exception:
+                pass
             log.info("Declined challenge from %s (at max concurrent games)", challenger)
             return
 
@@ -148,7 +154,10 @@ class EventLoop:
         try:
             from ouroboros.scheduler import is_lichess_active
             if not is_lichess_active():
-                self.client.decline_challenge(challenge_id, "later")
+                try:
+                    self.client.decline_challenge(challenge_id, "later")
+                except Exception:
+                    pass
                 log.info("Declined challenge from %s (self-play mode)", challenger)
                 return
         except Exception:
@@ -157,10 +166,16 @@ class EventLoop:
         accept, reason = _should_accept(challenge, self.cfg)
         if accept:
             log.info("Accepting challenge from %s (%s)", challenger, challenge_id)
-            self.client.accept_challenge(challenge_id)
+            try:
+                self.client.accept_challenge(challenge_id)
+            except Exception as e:
+                log.warning("Failed to accept challenge %s: %s", challenge_id, e)
         else:
             log.info("Declining challenge from %s: %s", challenger, reason)
-            self.client.decline_challenge(challenge_id, reason)
+            try:
+                self.client.decline_challenge(challenge_id, reason)
+            except Exception as e:
+                log.warning("Failed to decline challenge %s: %s", challenge_id, e)
 
     def _handle_game_start(self, game: dict) -> None:
         game_id = game.get("gameId", "")
@@ -179,7 +194,10 @@ class EventLoop:
         t.start()
 
         if self.on_game_start:
-            self.on_game_start(game_id)
+            try:
+                self.on_game_start(game_id)
+            except Exception as e:
+                log.exception("on_game_start error for %s: %s", game_id, e)
 
     def _run_game(self, game_id: str, color: str, game_info: dict) -> None:
         from ouroboros.lichess.game import GameRunner
@@ -187,14 +205,15 @@ class EventLoop:
         from ouroboros.opponents.antibot import AntiBotController, get_determinism
         from ouroboros.opponents.profiles import get_or_create_opponent
 
-        try:
-            # Build opponent context
-            opponent = game_info.get("opponent", {})
-            opp_username = opponent.get("username", "unknown")
-            opp_elo = opponent.get("rating", 1500)
-            opp_title = opponent.get("title", "") or ""
-            opp_is_bot = opp_title == "BOT"
+        # Extracted outside try so on_game_finish always has them
+        opponent = game_info.get("opponent", {})
+        opp_username = opponent.get("username", "unknown")
+        opp_elo = opponent.get("rating", 1500)
+        opp_title = opponent.get("title", "") or ""
+        opp_is_bot = opp_title == "BOT"
 
+        result = None
+        try:
             opp_id = get_or_create_opponent(opp_username, opp_is_bot, opp_title, opp_elo)
 
             # Check if this is a revenge match (opponent has beaten us more than we've beaten them)
@@ -227,16 +246,17 @@ class EventLoop:
             result = runner.run()
             log.info("Game %s finished: %s", game_id, result)
 
-            if self.on_game_finish:
-                self.on_game_finish(game_id, result, opp_username, opp_elo, opp_is_bot, color)
-
-            # Refresh win/loss/draw totals in the web viewer
-            _push_record_to_viewer()
-
         except Exception as e:
             log.exception("Error in game %s: %s", game_id, e)
         finally:
             self._active_games.pop(game_id, None)
+            # Always notify finish so matchmaker/throttle are unblocked even on crash
+            if self.on_game_finish:
+                try:
+                    self.on_game_finish(game_id, result, opp_username, opp_elo, opp_is_bot, color)
+                except Exception as e:
+                    log.exception("on_game_finish error for %s: %s", game_id, e)
+            _push_record_to_viewer()
 
     def stop(self) -> None:
         self._stop_event.set()

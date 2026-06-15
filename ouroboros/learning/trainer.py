@@ -12,7 +12,7 @@ import torch.nn.functional as F
 
 from ouroboros.engine.network import (
     OuroborosNet, build_net, save_checkpoint, load_checkpoint,
-    best_path, latest_path, ckpt_path,
+    best_path, latest_path, ckpt_path, MODELS_DIR,
 )
 from ouroboros.learning.buffer import ReplayBuffer
 from ouroboros.persistence import get_db, meta_get, meta_set
@@ -123,9 +123,23 @@ class Trainer:
             save_checkpoint(self.net, path, {"step": self.step})
             save_checkpoint(self.net, latest_path(), {"step": self.step})
             log.info("Checkpoint saved at step %d", self.step)
+            self._prune_old_checkpoints(keep=5)
 
         if self.step > 0 and self.step % self.ladder_every == 0:
             self._run_ladder()
+
+    def _prune_old_checkpoints(self, keep: int = 5) -> None:
+        """Delete all but the most recent `keep` numbered checkpoint files."""
+        try:
+            ckpts = sorted(
+                MODELS_DIR.glob("ckpt_*.pt"),
+                key=lambda p: int(p.stem.split("_")[1]),
+            )
+            for old in ckpts[:-keep]:
+                old.unlink(missing_ok=True)
+                log.debug("Pruned old checkpoint %s", old.name)
+        except Exception as e:
+            log.warning("Checkpoint pruning failed: %s", e)
 
     def _run_ladder(self) -> None:
         log.info("Running ladder match at step %d", self.step)
