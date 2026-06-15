@@ -14,8 +14,9 @@ from ouroboros.persistence import get_db
 
 log = logging.getLogger(__name__)
 
-LIVE_WEIGHT = 4.0
-IMITATION_WEIGHT = 2.0
+LIVE_WEIGHT = 4.0        # weight for our own game positions
+LIVE_LOSS_WEIGHT = 2.0   # lower weight for our positions in lost games (policy target is a losing move)
+IMITATION_WEIGHT = 3.0   # weight for imitating the winner's moves
 
 
 def process_finished_game(
@@ -55,7 +56,11 @@ def process_finished_game(
         positions.append((board.copy(), move))
         board.push(move)
 
-    # Add all positions with our-color perspective z
+    # Add all positions with our-color perspective z.
+    # Use lower weight for our own positions in losses: the policy target (the move
+    # we played) led to a loss, so reinforcing it strongly would be counterproductive.
+    # The value signal (z=-1) is still valuable; we just down-weight the policy loss.
+    own_weight = LIVE_LOSS_WEIGHT if result == "loss" else LIVE_WEIGHT
     for pos_board, move in positions:
         state = board_to_tensor(pos_board).numpy()
         # Policy: one-hot on the played move
@@ -67,7 +72,8 @@ def process_finished_game(
             continue
 
         z = our_result if pos_board.turn == our_chess_color else -our_result
-        buffer.add(state, policy, z, weight=LIVE_WEIGHT, source=SOURCE_LICHESS_LIVE)
+        w = own_weight if pos_board.turn == our_chess_color else LIVE_WEIGHT
+        buffer.add(state, policy, z, weight=w, source=SOURCE_LICHESS_LIVE)
 
     # Winner imitation: if we lost, add opponent's moves
     if result == "loss":
@@ -77,7 +83,7 @@ def process_finished_game(
             node = node.variations[0]
             move = node.move
             if board.turn != our_chess_color:
-                # This is opponent's move — imitate it
+                # This is opponent's move -- imitate it
                 state = board_to_tensor(board).numpy()
                 policy = np.zeros(4672, dtype=np.float32)
                 try:

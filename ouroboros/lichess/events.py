@@ -228,7 +228,7 @@ class EventLoop:
             log.info("Game %s finished: %s", game_id, result)
 
             if self.on_game_finish:
-                self.on_game_finish(game_id, result, opp_username, opp_elo, opp_is_bot)
+                self.on_game_finish(game_id, result, opp_username, opp_elo, opp_is_bot, color)
 
             # Refresh win/loss/draw totals in the web viewer
             _push_record_to_viewer()

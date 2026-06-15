@@ -32,6 +32,11 @@ class Matchmaker:
         self._thread: Optional[threading.Thread] = None
         self._challenges_this_hour = 0
         self._hour_start = time.time()
+        self._in_game = False   # set True while a Lichess game is active
+
+    def set_in_game(self, active: bool) -> None:
+        """Call with True when a game starts, False when it ends."""
+        self._in_game = active
 
     def start(self) -> None:
         if not self.cfg.get("matchmaker_enabled", True):
@@ -64,6 +69,11 @@ class Matchmaker:
 
     def _cycle(self) -> None:
         """One challenge attempt cycle."""
+        # Don't send a challenge while already in a game
+        if self._in_game:
+            log.debug("Matchmaker: skipping challenge -- game in progress")
+            return
+
         # Reset hourly counter
         if time.time() - self._hour_start >= 3600:
             self._challenges_this_hour = 0

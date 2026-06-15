@@ -25,9 +25,9 @@ DEFAULTS: dict[str, Any] = {
     "lr_final": 0.002,
     "lr_schedule_steps": 500_000,
     "l2_weight": 1e-4,
-    "checkpoint_every": 1000,
-    "ladder_every": 5000,
-    "ladder_games": 40,
+    "checkpoint_every": 500,
+    "ladder_every": 2000,
+    "ladder_games": 20,
     "promotion_threshold": 0.55,
     "accept_rated": True,
     "accept_casual": True,
@@ -37,9 +37,9 @@ DEFAULTS: dict[str, Any] = {
     "accept_bullet": False,
     "max_concurrent_games": 1,
     "matchmaker_enabled": True,
-    "matchmaker_time": 5,
-    "matchmaker_increment": 3,
-    "matchmaker_max_per_hour": 10,
+    "matchmaker_time": 3,
+    "matchmaker_increment": 2,
+    "matchmaker_max_per_hour": 15,
     "chat_enabled": True,
     "winner_imitation": True,
     "resign_threshold": -0.95,
@@ -54,7 +54,7 @@ DEFAULTS: dict[str, Any] = {
     "determinism_threshold": 0.7,
     # Book-speed cutoff confidence
     "book_speed_confidence": 0.5,
-    # Hugging Face Hub sync (optional — env vars HF_TOKEN / HF_REPO take priority)
+    # Hugging Face Hub sync (optional -- env vars HF_TOKEN / HF_REPO take priority)
     "hf_token": "",
     "hf_repo": "",
 }
