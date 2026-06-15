@@ -1,0 +1,12 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "ouroboros_native"
+version = "0.1.0"
+description = "Native acceleration for OUROBOROS board encoding (optional)."
+requires-python = ">=3.8"
+
+[tool.maturin]
+# Pure cdylib extension module; no Python package directory.
