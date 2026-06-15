@@ -41,6 +41,9 @@ class Matchmaker:
     def start(self) -> None:
         if not self.cfg.get("matchmaker_enabled", True):
             return
+        if self._thread and self._thread.is_alive():
+            log.debug("Matchmaker already running; skipping duplicate start")
+            return
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
