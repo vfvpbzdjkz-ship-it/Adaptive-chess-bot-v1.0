@@ -76,6 +76,8 @@ class Trainer:
             net.parameters(), lr=self.lr_init, momentum=0.9, weight_decay=0.0
         )
         self._last_loss: Optional[float] = None
+        self._last_policy_loss: Optional[float] = None
+        self._last_value_loss: Optional[float] = None
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
@@ -115,6 +117,8 @@ class Trainer:
         self.step += 1
         meta_set("train_step", str(self.step))
         self._last_loss = float(loss.item())
+        self._last_policy_loss = pl
+        self._last_value_loss = vl
         return self._last_loss
 
     def maybe_checkpoint(self) -> None:
@@ -219,7 +223,11 @@ class Trainer:
             if loss is not None:
                 self.maybe_checkpoint()
                 if status_fn:
-                    status_fn(steps=self.step, loss=loss)
+                    status_fn(
+                        steps=self.step, loss=loss,
+                        policy_loss=self._last_policy_loss,
+                        value_loss=self._last_value_loss,
+                    )
             else:
                 time.sleep(0.5)
 

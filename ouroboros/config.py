@@ -7,7 +7,22 @@ from typing import Any
 
 CONFIG_PATH = Path("data/config.json")
 
+# Bump when operational defaults below must override a config.json that was
+# already written to a persisted volume (e.g. Railway). load() migrates older
+# stored configs up to this version, forcing the operational keys it manages.
+CONFIG_VERSION = 2
+
+# Operational keys that the migration re-asserts from code on a version bump.
+# These are runtime behaviours (what to play, how hard to think) that should
+# track the deployed code, not a stale config baked at first boot.
+_MIGRATION_KEYS = (
+    "accept_blitz", "accept_rapid", "accept_classical", "accept_bullet",
+    "accept_correspondence", "matchmaker_time", "matchmaker_increment",
+    "matchmaker_max_per_hour",
+)
+
 DEFAULTS: dict[str, Any] = {
+    "config_version": CONFIG_VERSION,
     "mode": "auto",
     "lichess_token": "",
     "bot_username": "",
@@ -31,15 +46,20 @@ DEFAULTS: dict[str, Any] = {
     "promotion_threshold": 0.55,
     "accept_rated": True,
     "accept_casual": True,
-    "accept_blitz": True,
-    "accept_rapid": True,
+    # Classical-only: long time controls give the (currently weak) net enough
+    # search per move to find tactics and avoid blunders, which is the single
+    # biggest lever on actually winning games.
+    "accept_blitz": False,
+    "accept_rapid": False,
     "accept_classical": True,
     "accept_bullet": False,
+    "accept_correspondence": False,
     "max_concurrent_games": 1,
     "matchmaker_enabled": True,
-    "matchmaker_time": 3,
-    "matchmaker_increment": 2,
-    "matchmaker_max_per_hour": 15,
+    # 30+0 -> 30 min estimated duration, comfortably in Lichess "classical".
+    "matchmaker_time": 30,
+    "matchmaker_increment": 0,
+    "matchmaker_max_per_hour": 6,
     "chat_enabled": True,
     "winner_imitation": True,
     "resign_threshold": -0.95,
@@ -60,8 +80,11 @@ DEFAULTS: dict[str, Any] = {
 }
 
 _PROFILE_SPECS = {
-    "small":  {"blocks": 5,  "channels": 64,  "sims_sp": 96,  "sims_live": 256},
-    "medium": {"blocks": 10, "channels": 128, "sims_sp": 256, "sims_live": 800},
+    # sims_live raised: classical clocks leave plenty of time, and MCTS does
+    # exact terminal/checkmate detection, so deeper search wins games even with
+    # a lightly-trained net. The per-move wall-clock deadline still caps it.
+    "small":  {"blocks": 5,  "channels": 64,  "sims_sp": 96,  "sims_live": 1024},
+    "medium": {"blocks": 10, "channels": 128, "sims_sp": 256, "sims_live": 1200},
     "large":  {"blocks": 19, "channels": 256, "sims_sp": 600, "sims_live": 1600},
 }
 
@@ -82,14 +105,33 @@ def detect_hardware() -> tuple[str, str, int]:
 
 def load() -> dict[str, Any]:
     cfg = dict(DEFAULTS)
+    stored: dict[str, Any] = {}
     if CONFIG_PATH.exists():
         with open(CONFIG_PATH) as f:
             stored = json.load(f)
         cfg.update(stored)
+
     # Apply profile specs
     spec = _PROFILE_SPECS.get(cfg["hardware_profile"], _PROFILE_SPECS["small"])
     cfg.setdefault("net_blocks", spec["blocks"])
     cfg.setdefault("net_channels", spec["channels"])
+
+    # Check the stored version, not the merged cfg (DEFAULTS already carries the
+    # current version, which would otherwise mask a stale stored config).
+    if stored and int(stored.get("config_version", 0)) < CONFIG_VERSION:
+        # Migrate a stale stored config: re-assert operational keys from code and
+        # re-resolve the live search budget from the profile, then persist so the
+        # change survives restarts.
+        for key in _MIGRATION_KEYS:
+            cfg[key] = DEFAULTS[key]
+        cfg["mcts_sims_live"] = spec["sims_live"]
+        cfg["config_version"] = CONFIG_VERSION
+        try:
+            save(cfg)
+        except Exception:
+            pass
+        return cfg
+
     if cfg["mcts_sims_selfplay"] == DEFAULTS["mcts_sims_selfplay"]:
         cfg["mcts_sims_selfplay"] = spec["sims_sp"]
     if cfg["mcts_sims_live"] == DEFAULTS["mcts_sims_live"]:

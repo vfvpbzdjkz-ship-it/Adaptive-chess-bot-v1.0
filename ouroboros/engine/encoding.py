@@ -7,6 +7,18 @@ import chess
 import numpy as np
 import torch
 
+# Optional native acceleration (built from rust_ext/). The pure-Python
+# implementations below remain the source of truth and the guaranteed fallback;
+# the native module only replaces the hot inner loops and is validated to
+# produce byte-identical output. If it is missing (e.g. the Rust build was
+# skipped), everything still works.
+try:
+    import ouroboros_native as _native
+    HAS_NATIVE = True
+except Exception:  # pragma: no cover - depends on build environment
+    _native = None
+    HAS_NATIVE = False
+
 # ── Policy index layout (per from-square, 73 planes) ──────────────────────────
 # [0..55]  queen-style: 8 directions × 7 distances
 # [56..63] knight moves: 8 deltas
@@ -46,6 +58,19 @@ def move_to_index(board: chess.Board, move: chess.Move) -> int:
     as if flipped (rank 0 ↔ rank 7), so the side to move always attacks
     'upward' (increasing rank).
     """
+    if HAS_NATIVE:
+        idx = _native.move_to_index(
+            move.from_square, move.to_square, move.promotion or 0,
+            board.turn == chess.BLACK,
+        )
+        if idx < 0:
+            raise ValueError(f"Cannot encode move {move} on board\n{board}")
+        return idx
+    return _py_move_to_index(board, move)
+
+
+def _py_move_to_index(board: chess.Board, move: chess.Move) -> int:
+    """Pure-Python reference for move_to_index (fallback + source of truth)."""
     flip = board.turn == chess.BLACK
 
     from_sq = move.from_square
@@ -156,10 +181,30 @@ def index_to_move(board: chess.Board, idx: int) -> chess.Move:
 
 def legal_move_mask(board: chess.Board) -> np.ndarray:
     """Return a bool mask of shape (4672,) with True at legal move indices."""
+    if HAS_NATIVE:
+        froms: list[int] = []
+        tos: list[int] = []
+        promos: list[int] = []
+        for move in board.legal_moves:
+            froms.append(move.from_square)
+            tos.append(move.to_square)
+            promos.append(move.promotion or 0)
+        mask = np.zeros(POLICY_SIZE, dtype=np.bool_)
+        if froms:
+            idxs = _native.legal_indices(froms, tos, promos, board.turn == chess.BLACK)
+            for idx in idxs:
+                if idx >= 0:
+                    mask[idx] = True
+        return mask
+    return _py_legal_move_mask(board)
+
+
+def _py_legal_move_mask(board: chess.Board) -> np.ndarray:
+    """Pure-Python reference for legal_move_mask (fallback + source of truth)."""
     mask = np.zeros(POLICY_SIZE, dtype=np.bool_)
     for move in board.legal_moves:
         try:
-            idx = move_to_index(board, move)
+            idx = _py_move_to_index(board, move)
             mask[idx] = True
         except ValueError:
             pass
@@ -176,6 +221,42 @@ def board_to_tensor(board: chess.Board) -> torch.Tensor:
 
     Always from the side-to-move's perspective.
     """
+    if HAS_NATIVE:
+        return _native_board_to_tensor(board)
+    return _py_board_to_tensor(board)
+
+
+def _native_board_to_tensor(board: chess.Board) -> torch.Tensor:
+    """Native-backed board encoding. python-chess supplies the bitboards and
+    rule-dependent flags; the native module fills the plane buffer."""
+    own_color = board.turn
+    opp_color = not own_color
+    flip = board.turn == chess.BLACK
+
+    own = [board.pieces_mask(pt, own_color) for pt in _PIECE_ORDER]
+    opp = [board.pieces_mask(pt, opp_color) for pt in _PIECE_ORDER]
+
+    cr = board.castling_rights
+    if board.turn == chess.WHITE:
+        castle = [bool(cr & chess.BB_H1), bool(cr & chess.BB_A1),
+                  bool(cr & chess.BB_H8), bool(cr & chess.BB_A8)]
+    else:
+        castle = [bool(cr & chess.BB_H8), bool(cr & chess.BB_A8),
+                  bool(cr & chess.BB_H1), bool(cr & chess.BB_A1)]
+
+    ep_file = chess.square_file(board.ep_square) if board.ep_square is not None else -1
+    halfmove = min(board.halfmove_clock / 100.0, 1.0)
+    repetition = board.is_repetition(2)
+
+    buf = _native.board_to_planes(
+        own, opp, castle, ep_file, float(halfmove), repetition, flip,
+    )
+    planes = np.frombuffer(buf, dtype="<f4").reshape(19, 8, 8).copy()
+    return torch.from_numpy(planes)
+
+
+def _py_board_to_tensor(board: chess.Board) -> torch.Tensor:
+    """Pure-Python reference for board_to_tensor (fallback + source of truth)."""
     flip = board.turn == chess.BLACK
     planes = np.zeros((19, 8, 8), dtype=np.float32)
 

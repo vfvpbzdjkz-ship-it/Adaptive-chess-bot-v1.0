@@ -1,0 +1,16 @@
+[package]
+name = "ouroboros_native"
+version = "0.1.0"
+edition = "2021"
+description = "Native acceleration for OUROBOROS board encoding (optional)."
+
+[lib]
+name = "ouroboros_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module"] }
+
+[profile.release]
+opt-level = 3
+lto = true

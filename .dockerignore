@@ -1,0 +1,13 @@
+.git
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+.DS_Store
+.pytest_cache/
+# Local Rust build artifacts (the image rebuilds the wheel itself)
+rust_ext/target/
+**/*.whl
+data/

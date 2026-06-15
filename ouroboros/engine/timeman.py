@@ -12,7 +12,13 @@ class TimeManager:
     def __init__(self, base_sims: int = 96):
         self.base_sims = base_sims
         self._timings: collections.deque = collections.deque(maxlen=_WINDOW)
-        self._sims_per_sec: float = 1.0  # initial pessimistic estimate
+        # Initial guess until the first move is timed. Starting too low wastes the
+        # generous early-game budget of a classical clock on a near-empty search.
+        self._sims_per_sec: float = 25.0
+
+    @property
+    def sims_per_sec(self) -> float:
+        return self._sims_per_sec
 
     def record(self, sims: int, elapsed: float) -> None:
         if elapsed > 0.01:
@@ -43,7 +49,10 @@ class TimeManager:
             think_s = max(0.1, min(target_s, hard_ceil))
 
         sims = int(think_s * max(self._sims_per_sec, 1.0))
-        sims = max(1, min(sims, cap_sims))
+        # When we have real time to think, never search trivially few nodes; the
+        # per-move wall-clock deadline (set by the caller) still cuts it short.
+        floor = min(cap_sims, 64) if remaining_s >= 30.0 else 1
+        sims = max(floor, min(sims, cap_sims))
         return sims, think_s
 
 
