@@ -1,10 +1,9 @@
 """Self-play worker processes that generate training data."""
 import logging
 import multiprocessing as mp
-import os
 import queue
+import threading
 import time
-from pathlib import Path
 from typing import Optional
 
 import chess
@@ -104,7 +103,18 @@ def _game_result(board: chess.Board) -> float:
 
 
 class SelfPlayWorker:
-    """Runs self-play in a background process, writing to shared buffer."""
+    """Runs self-play in a background process, feeding samples to buffer via queue.
+
+    The worker process generates games and puts (state, policy, z, weight, source)
+    tuples into an mp.Queue. A drain thread in the main process reads from the queue
+    and calls buffer.add(), ensuring buffer._count and _write_ptr are updated in the
+    main process where the training loop can see them.
+
+    Direct buffer writes from a forked child process are invisible to the parent
+    because _write_ptr and _count are copy-on-write Python integers post-fork.
+    """
+
+    _QUEUE_MAXSIZE = 2000  # ~47 MB cap; put_nowait drops samples when full
 
     def __init__(self, cfg: dict, buffer: ReplayBuffer, worker_id: int = 0):
         self.cfg = cfg
@@ -114,15 +124,34 @@ class SelfPlayWorker:
         self._process: Optional[mp.Process] = None
         self._game_count = mp.Value("i", 0)
         self._throttle = mp.Value("i", 0)
+        self._sample_queue: mp.Queue = mp.Queue(maxsize=self._QUEUE_MAXSIZE)
+        self._drain_thread: Optional[threading.Thread] = None
+        self._drain_stop = threading.Event()
 
     def start(self) -> None:
+        self._drain_stop.clear()
+        self._drain_thread = threading.Thread(target=self._drain_loop, daemon=True)
+        self._drain_thread.start()
+
         self._process = mp.Process(
             target=_worker_loop,
-            args=(self.cfg, self.buffer, self._stop_event, self._game_count, self._throttle),
+            args=(self.cfg, self._sample_queue, self._stop_event, self._game_count, self._throttle),
             daemon=True,
         )
         self._process.start()
         log.info("SelfPlayWorker %d started (pid=%d)", self.worker_id, self._process.pid)
+
+    def _drain_loop(self) -> None:
+        """Read samples from the inter-process queue and add to buffer in main process."""
+        while not self._drain_stop.is_set():
+            try:
+                item = self._sample_queue.get(timeout=1.0)
+                state, policy, z, weight, source = item
+                self.buffer.add(state, policy, z, weight=weight, source=source)
+            except queue.Empty:
+                continue
+            except Exception as e:
+                log.warning("Sample drain error: %s", e)
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -130,6 +159,12 @@ class SelfPlayWorker:
             self._process.join(timeout=10)
             if self._process.is_alive():
                 self._process.terminate()
+        # Let drain thread flush any items still in the queue before stopping
+        time.sleep(0.5)
+        self._drain_stop.set()
+        if self._drain_thread:
+            self._drain_thread.join(timeout=5)
+        self.buffer.flush()
 
     def throttle(self, enabled: bool) -> None:
         self._throttle.value = 1 if enabled else 0
@@ -141,15 +176,15 @@ class SelfPlayWorker:
 
 def _worker_loop(
     cfg: dict,
-    buffer: ReplayBuffer,
+    sample_queue: mp.Queue,
     stop_event: mp.Event,
     game_count: mp.Value,
     throttle: mp.Value,
 ) -> None:
-    """Worker process entry point."""
+    """Worker process: generate self-play games and push samples to main process via queue."""
     import ouroboros.logging_setup as ls
     ls.setup_logging()
-    log = logging.getLogger(f"selfplay.worker")
+    log = logging.getLogger("selfplay.worker")
 
     device = cfg.get("device", "cpu")
     net = build_net(cfg, device)
@@ -174,15 +209,16 @@ def _worker_loop(
         try:
             samples = _play_game(net, device, cfg, game_count.value)
             for state, policy, z in samples:
-                buffer.add(state, policy, z, weight=1.0, source=SOURCE_SELFPLAY)
+                try:
+                    sample_queue.put_nowait((state, policy, z, 1.0, SOURCE_SELFPLAY))
+                except queue.Full:
+                    pass  # training is behind; drop sample gracefully
             with game_count.get_lock():
                 game_count.value += 1
             games_local += 1
         except Exception as e:
             log.exception("Error in self-play game: %s", e)
             time.sleep(1)
-
-    buffer.flush()
 
 
 class SelfPlayManager:

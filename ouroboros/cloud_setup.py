@@ -156,10 +156,10 @@ def run_cloud_setup() -> dict:
     # Run seed if no checkpoint exists yet
     from ouroboros.engine.network import best_path
     if not best_path().exists():
-        # Seed uses pure heuristics (no MCTS), so 500 games ≈ a few seconds.
-        # Increase SEED_GAMES / SEED_TRAIN_STEPS via env vars for a stronger start.
-        n_games = _env_int("SEED_GAMES", 500)
-        train_steps = _env_int("SEED_TRAIN_STEPS", 500)
+        # Heuristic seed games take ~1-2 ms each on CPU; 3000 games ≈ 5-10 s.
+        # Override with SEED_GAMES / SEED_TRAIN_STEPS env vars if needed.
+        n_games = _env_int("SEED_GAMES", 3000)
+        train_steps = _env_int("SEED_TRAIN_STEPS", 2000)
         print(f"Running seed bootstrap ({n_games} games, {train_steps} steps)...")
         print("This is a one-time step. Progress is saved — safe to restart.")
         from ouroboros.learning.seed import run_seed
