@@ -108,11 +108,13 @@ class Trainer:
         weights = weights / (weights.mean() + 1e-8)
 
         self._update_lr()
+        self.net.train()  # activate BatchNorm batch stats + update running stats
         self.optimizer.zero_grad()
         loss, pl, vl = compute_loss(self.net, states, policies, values, weights, self.l2_coef)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.net.parameters(), 1.0)
         self.optimizer.step()
+        self.net.eval()   # restore eval mode for MCTS inference
 
         self.step += 1
         meta_set("train_step", str(self.step))
