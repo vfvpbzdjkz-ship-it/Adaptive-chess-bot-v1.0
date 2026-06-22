@@ -35,13 +35,13 @@ def compute_loss(
 ) -> tuple[torch.Tensor, float, float]:
     logits, values = net(states)
 
-    # Mask logits: only non-zero policy targets
-    mask = policy_targets > 0
-    logits_masked = logits.clone()
-    logits_masked[~mask] = -1e9
-
-    # Cross-entropy policy loss
-    log_probs = F.log_softmax(logits_masked, dim=1)
+    # Cross-entropy policy loss over all 4672 positions.
+    # Targets are zero for unvisited/illegal moves, so they contribute nothing
+    # to the loss value; the gradient still correctly suppresses those positions.
+    # Previous masked version set non-target logits to -1e9, which collapsed
+    # softmax to 1.0 on the single target for one-hot Lichess labels -> zero
+    # gradient on the policy head for all live-game training data.
+    log_probs = F.log_softmax(logits, dim=1)
     policy_loss = -(policy_targets * log_probs).sum(dim=1)
     policy_loss = (policy_loss * weights).mean()
 
