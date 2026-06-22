@@ -1,7 +1,7 @@
 """Headless configuration from environment variables (no interactive wizard).
 
 Used automatically when LICHESS_TOKEN env var is set and data/config.json
-does not exist — i.e., first boot in a cloud environment like Railway.
+does not exist -- i.e., first boot in a cloud environment like Railway.
 """
 import logging
 import os
@@ -43,7 +43,7 @@ def _validate_token(token: str) -> dict:
     if resp.status_code == 401:
         raise RuntimeError(
             "LICHESS_TOKEN is invalid or expired (got 401).\n"
-            "Go to Railway → Variables → update LICHESS_TOKEN with a fresh token from:\n"
+            "Go to Railway -> Variables -> update LICHESS_TOKEN with a fresh token from:\n"
             "  https://lichess.org/account/oauth/token/create\n"
             "Required scopes: bot:play  challenge:read  challenge:write"
         )
@@ -141,7 +141,7 @@ def run_cloud_setup() -> dict:
         "max_concurrent_games": _env_int("MAX_CONCURRENT_GAMES", 1),
         "chat_enabled": _env_bool("CHAT_ENABLED", True),
         "winner_imitation": _env_bool("WINNER_IMITATION", True),
-        # Railway free tier: 10 K positions ≈ 100 MB on disk (vs 2 GB default).
+        # Railway free tier: 10 K positions ~= 100 MB on disk (vs 2 GB default).
         # Override with BUFFER_CAPACITY env var if you have more storage.
         "buffer_capacity": _env_int("BUFFER_CAPACITY", 10_000),
     })
@@ -156,16 +156,16 @@ def run_cloud_setup() -> dict:
     # Run seed if no checkpoint exists yet
     from ouroboros.engine.network import best_path
     if not best_path().exists():
-        # Seed uses pure heuristics (no MCTS), so 500 games ≈ a few seconds.
-        # Increase SEED_GAMES / SEED_TRAIN_STEPS via env vars for a stronger start.
-        n_games = _env_int("SEED_GAMES", 500)
-        train_steps = _env_int("SEED_TRAIN_STEPS", 500)
+        # Heuristic seed games take ~1-2 ms each on CPU; 3000 games ~= 5-10 s.
+        # Override with SEED_GAMES / SEED_TRAIN_STEPS env vars if needed.
+        n_games = _env_int("SEED_GAMES", 3000)
+        train_steps = _env_int("SEED_TRAIN_STEPS", 2000)
         print(f"Running seed bootstrap ({n_games} games, {train_steps} steps)...")
-        print("This is a one-time step. Progress is saved — safe to restart.")
+        print("This is a one-time step. Progress is saved -- safe to restart.")
         from ouroboros.learning.seed import run_seed
         run_seed(cfg, n_games=n_games, train_steps=train_steps)
     else:
-        print("Existing checkpoint found — skipping seed.")
+        print("Existing checkpoint found -- skipping seed.")
 
     save_cfg(cfg)
     print("Cloud setup complete.")
