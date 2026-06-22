@@ -113,16 +113,17 @@ class Matchmaker:
                 log.debug("Challenge to %s failed (%s); trying another bot", username, e)
 
     def _pick_target(self, exclude: set[str] | None = None) -> Optional[dict]:
-        """Pick a bot to challenge. Prefer revenge targets; skip already-tried ones."""
+        """Pick a bot to challenge. Prefer revenge targets; filter out very strong bots."""
         exclude = exclude or set()
 
-        # Revenge targets first (bots that have beaten us more than we've beaten them)
+        # wins_vs_us = times opponent beat us; losses_vs_us = times we beat opponent
+        # Revenge = bots that have beaten us more than we've beaten them
         try:
             with get_db() as conn:
                 rows = conn.execute(
                     "SELECT username FROM opponents "
-                    "WHERE is_bot=1 AND losses_vs_us > wins_vs_us "
-                    "ORDER BY losses_vs_us-wins_vs_us DESC LIMIT 10",
+                    "WHERE is_bot=1 AND wins_vs_us > losses_vs_us "
+                    "ORDER BY wins_vs_us-losses_vs_us DESC LIMIT 10",
                 ).fetchall()
             revenge_targets = [r["username"] for r in rows if r["username"] not in exclude]
         except Exception as e:
@@ -132,17 +133,27 @@ class Matchmaker:
         if revenge_targets:
             return {"id": random.choice(revenge_targets)}
 
-        # Fall back to a random online bot, excluding already-tried ones
+        # ELO-aware random bot selection: prefer bots <= 1800 ELO (skip Stockfish-tier)
+        t_limit = self.cfg.get("matchmaker_time", 30)
+        tc_key = "classical" if t_limit > 8 else "blitz" if t_limit > 3 else "bullet"
         try:
-            bots = []
+            preferred: list[dict] = []
+            fallback: list[dict] = []
             for bot in self.client.get_online_bots():
-                if bot.get("id", "") not in exclude:
-                    bots.append(bot)
-                if len(bots) >= 50:
+                bid = bot.get("id", "")
+                if not bid or bid in exclude:
+                    continue
+                perfs = bot.get("perfs", {})
+                bot_elo = perfs.get(tc_key, {}).get("rating", None)
+                if bot_elo is None or bot_elo <= 1800:
+                    preferred.append(bot)
+                fallback.append(bot)
+                if len(fallback) >= 100:
                     break
-            if not bots:
+            pool = preferred if preferred else fallback
+            if not pool:
                 return None
-            return random.choice(bots)
+            return random.choice(pool)
         except Exception as e:
             log.debug("Failed to get online bots: %s", e)
             return None
