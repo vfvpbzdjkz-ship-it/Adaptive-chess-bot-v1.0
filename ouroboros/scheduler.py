@@ -49,14 +49,27 @@ class PlayScheduler:
             self._thread.join(timeout=5)
 
     def force_one_game(self) -> None:
-        """Immediately trigger one challenge cycle regardless of current mode.
-
-        The scheduler timer is not reset — selfplay remaining time is preserved.
-        """
+        """Immediately trigger one challenge cycle regardless of current mode."""
         threading.Thread(
             target=self._matchmaker.challenge_once, daemon=True
         ).start()
         log.info("Force-one-game requested")
+
+    def challenge_with_options(self, username: str, time_limit: int, increment: int) -> None:
+        """Challenge with user-specified opponent and/or time control from the GUI."""
+        log.info("Custom challenge: opp=%r tc=%d+%d", username or "(auto)", time_limit, increment)
+        if username:
+            threading.Thread(
+                target=self._matchmaker.challenge_specific,
+                args=(username, time_limit, increment),
+                daemon=True,
+            ).start()
+        else:
+            threading.Thread(
+                target=self._matchmaker.challenge_once_with_tc,
+                args=(time_limit, increment),
+                daemon=True,
+            ).start()
 
     def _loop(self) -> None:
         global _lichess_active, _switch_at

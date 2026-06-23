@@ -1,4 +1,4 @@
-"""OUROBOROS entry point. Wizard -> mode dispatch."""
+"""OUROBOROS entry point. Wizard → mode dispatch."""
 import argparse
 import logging
 import os
@@ -30,7 +30,7 @@ def _setup() -> dict:
     from ouroboros import config as cfg_mod
     if cfg_mod.is_configured():
         return cfg_mod.load()
-    # Cloud / headless: LICHESS_TOKEN env var present -> no interactive input needed
+    # Cloud / headless: LICHESS_TOKEN env var present → no interactive input needed
     from ouroboros.cloud_setup import is_cloud_mode
     if is_cloud_mode():
         from ouroboros.cloud_setup import run_cloud_setup
@@ -87,7 +87,7 @@ def run_auto(cfg: dict) -> None:
     from ouroboros.sync import pull_latest, PeriodicSync
     from ouroboros.web_viewer import (
         update_game, update_training_stats, load_elo_history,
-        set_force_game_callback, set_native_status,
+        set_force_game_callback, set_challenge_callback, set_native_status,
     )
     from ouroboros.scheduler import PlayScheduler
 
@@ -124,7 +124,7 @@ def run_auto(cfg: dict) -> None:
     load_elo_history()
 
     def on_game_start(game_id: str) -> None:
-        log.info("Game started: %s -- throttling self-play", game_id)
+        log.info("Game started: %s — throttling self-play", game_id)
         sp_manager.throttle(True)
         matchmaker.set_in_game(True)
         st.update(live_game=game_id)
@@ -162,6 +162,7 @@ def run_auto(cfg: dict) -> None:
     play_scheduler = PlayScheduler(matchmaker)
     play_scheduler.start()   # starts in Lichess mode; matchmaker started inside
     set_force_game_callback(play_scheduler.force_one_game)
+    set_challenge_callback(play_scheduler.challenge_with_options)
     periodic_sync = PeriodicSync(cfg, interval_minutes=15)
     periodic_sync.start()
 
@@ -316,8 +317,8 @@ def main() -> None:
     setup_logging(level=_logging.DEBUG if args.debug else _logging.INFO)
     log = _logging.getLogger(__name__)
 
-    # Start the spectator web server immediately -- before any setup that might
-    # take time -- so Railway health checks pass from the first second.
+    # Start the spectator web server immediately — before any setup that might
+    # take time — so Railway health checks pass from the first second.
     _viewer = None
     if os.environ.get("LICHESS_TOKEN") and os.environ.get("PORT"):
         try:
@@ -332,7 +333,7 @@ def main() -> None:
     for d in ["data", "data/models", "data/buffer", "data/logs"]:
         Path(d).mkdir(parents=True, exist_ok=True)
 
-    # Always init DB on boot -- /tmp is wiped on container restart so tables
+    # Always init DB on boot — /tmp is wiped on container restart so tables
     # must be recreated even when config.json already exists on the volume.
     from ouroboros.persistence import init_db
     init_db()
