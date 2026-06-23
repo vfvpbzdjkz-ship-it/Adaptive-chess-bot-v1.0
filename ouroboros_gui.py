@@ -294,6 +294,13 @@ class OuroborosGUI:
         s.map("TNotebook.Tab",
               background=[("selected", BG2)],
               foreground=[("selected", GOLD)])
+        s.configure("TCombobox",
+                    fieldbackground=BG3, background=BG3, foreground=FG,
+                    selectbackground=GOLD, selectforeground=BG,
+                    arrowcolor=GOLD, borderwidth=0)
+        s.map("TCombobox",
+              fieldbackground=[("readonly", BG3)],
+              foreground=[("readonly", FG)])
 
     # ── UI skeleton ────────────────────────────────────────────────────────────
 
@@ -403,14 +410,28 @@ class OuroborosGUI:
         _hr(right)
         _section_label(right, "CUSTOM CHALLENGE")
 
-        tk.Label(right, text="Opponent username  (blank = auto-pick)",
-                 fg=GREY, bg=BG2, font=("Segoe UI", 8)).pack(anchor="w")
-        self._opp_entry = tk.Entry(
-            right, bg=BG3, fg=FG, insertbackground=FG,
-            font=("Segoe UI", 10), relief="flat",
-            highlightthickness=1, highlightbackground=BG3, highlightcolor=GOLD,
+        opp_hdr = tk.Frame(right, bg=BG2)
+        opp_hdr.pack(fill="x")
+        tk.Label(opp_hdr, text="Opponent username  (blank = auto-pick)",
+                 fg=GREY, bg=BG2, font=("Segoe UI", 8)).pack(side="left")
+        self._refresh_bots_btn = tk.Button(
+            opp_hdr, text="↻  Refresh bots",
+            fg=GOLD, bg=BG3,
+            activeforeground=BG, activebackground=GOLD,
+            relief="flat", bd=0,
+            font=("Segoe UI", 7, "bold"),
+            cursor="hand2", padx=6, pady=1,
+            command=self._refresh_bots,
         )
-        self._opp_entry.pack(fill="x", ipady=4, pady=(2, 8))
+        self._refresh_bots_btn.pack(side="right")
+
+        opp_row = tk.Frame(right, bg=BG2)
+        opp_row.pack(fill="x", pady=(2, 8))
+        self._opp_combo = ttk.Combobox(
+            opp_row, values=[], font=("Segoe UI", 10),
+            state="normal",
+        )
+        self._opp_combo.pack(fill="x", ipady=3)
 
         tc_row = tk.Frame(right, bg=BG2)
         tc_row.pack(anchor="w", pady=(0, 6))
@@ -886,6 +907,45 @@ class OuroborosGUI:
 
     # ── Actions ───────────────────────────────────────────────────────────────
 
+    def _refresh_bots(self):
+        if not HAS_REQUESTS:
+            messagebox.showerror("Missing dependency",
+                                 "pip install requests\nthen restart the GUI.")
+            return
+        self._refresh_bots_btn.config(text="Loading…", state="disabled")
+
+        def _do():
+            try:
+                resp = requests.get(
+                    "https://lichess.org/api/bot/online",
+                    headers={"Accept": "application/x-ndjson"},
+                    timeout=10,
+                    stream=True,
+                )
+                bots = []
+                for line in resp.iter_lines():
+                    if line:
+                        try:
+                            data = json.loads(line)
+                            bid = data.get("id") or data.get("username", "")
+                            if bid:
+                                bots.append(bid)
+                        except Exception:
+                            pass
+                bots.sort(key=str.lower)
+            except Exception:
+                bots = []
+
+            def _apply():
+                self._opp_combo.config(values=bots)
+                self._refresh_bots_btn.config(
+                    text=f"↻  {len(bots)} bots" if bots else "↻  Refresh bots",
+                    state="normal",
+                )
+            self.root.after(0, _apply)
+
+        threading.Thread(target=_do, daemon=True).start()
+
     def _force_game(self):
         if not HAS_REQUESTS:
             messagebox.showerror("Missing dependency",
@@ -916,7 +976,7 @@ class OuroborosGUI:
                                  "pip install requests\nthen restart the GUI.")
             return
         url      = self.settings.get("bot_url", "http://localhost:8080").rstrip("/")
-        username = self._opp_entry.get().strip()
+        username = self._opp_combo.get().strip()
         try:
             time_limit = max(1, int(self._tc_min.get()))
             increment  = max(0, int(self._tc_inc.get()))
