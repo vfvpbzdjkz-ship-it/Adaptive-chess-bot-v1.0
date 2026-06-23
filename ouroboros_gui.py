@@ -33,7 +33,7 @@ try:
 except ImportError:
     HAS_REQUESTS = False
 
-# ── Colour palette (matches the web viewer) ────────────────────────────────────────────
+# ── Colour palette (matches the web viewer) ──────────────────────────────────
 BG      = "#1a1a2e"
 BG2     = "#141428"
 BG3     = "#1e1e3a"
@@ -63,7 +63,7 @@ SETTINGS_FILE = Path("gui_settings.json")
 POLL_INTERVAL = 3.0   # seconds
 
 
-# ── Settings persistence ───────────────────────────────────────────────────────────────────────────────
+# ── Settings persistence ──────────────────────────────────────────────────────
 
 def _load_settings() -> dict:
     defaults = {"bot_url": "http://localhost:8080", "lichess_token": "", "hf_token": ""}
@@ -79,7 +79,7 @@ def _save_settings(s: dict) -> None:
     SETTINGS_FILE.write_text(json.dumps(s, indent=2), encoding="utf-8")
 
 
-# ── FEN utilities ───────────────────────────────────────────────────────────────────────────────────
+# ── FEN utilities ─────────────────────────────────────────────────────────────
 
 def _parse_fen(fen: str) -> list:
     """Return 8×8 grid of piece chars ('' for empty) from FEN string."""
@@ -113,10 +113,10 @@ def _diff_fen(fen1: str, fen2: str):
     return frm, to
 
 
-# ── Chess board widget ──────────────────────────────────────────────────────────────────────────────
+# ── Chess board widget ────────────────────────────────────────────────────────
 
 class ChessBoard(tk.Canvas):
-    SQ = 58   # square size in pixels; board is SQ*8 x SQ*8
+    SQ = 58   # square size in pixels; board is SQ*8 × SQ*8
 
     def __init__(self, parent, **kw):
         size = self.SQ * 8
@@ -127,6 +127,7 @@ class ChessBoard(tk.Canvas):
         self._flipped  = False
         self._from_sqs: set = set()
         self._to_sqs:   set = set()
+        # Try several fonts; first hit wins
         self._piece_font = None
         self.after(50, self.draw)
 
@@ -176,7 +177,7 @@ class ChessBoard(tk.Canvas):
                                      font=font, anchor="center")
 
 
-# ── Sparkline widget ───────────────────────────────────────────────────────────────────────────────────
+# ── Sparkline widget ──────────────────────────────────────────────────────────
 
 class Sparkline(tk.Canvas):
     def __init__(self, parent, color=GOLD, width=160, height=36, **kw):
@@ -211,7 +212,7 @@ class Sparkline(tk.Canvas):
                          fill=self._color, outline="")
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _lbl(parent, text="", fg=FG2, bg=BG2, font=None, anchor="w", **kw):
     return tk.Label(parent, text=text, fg=fg, bg=bg,
@@ -240,7 +241,7 @@ def _countdown_str(remaining: int) -> str:
     return f"{m}:{s:02d}"
 
 
-# ── Stat box (used in training tab) ────────────────────────────────────────────────────────────────────
+# ── Stat box (used in training tab) ──────────────────────────────────────────
 
 class StatBox(tk.Frame):
     def __init__(self, parent, label: str, spark_color=GREY2, **kw):
@@ -261,7 +262,7 @@ class StatBox(tk.Frame):
             self.sparkline.set_values(vals)
 
 
-# ── Main application ───────────────────────────────────────────────────────────────────────────────────
+# ── Main application ──────────────────────────────────────────────────────────
 
 class OuroborosGUI:
     def __init__(self, root: tk.Tk):
@@ -282,7 +283,7 @@ class OuroborosGUI:
         self._tick()
         root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    # ── ttk style ────────────────────────────────────────────────────────────────────────────────
+    # ── ttk style ─────────────────────────────────────────────────────────────
 
     def _apply_ttk_style(self):
         s = ttk.Style()
@@ -294,9 +295,10 @@ class OuroborosGUI:
               background=[("selected", BG2)],
               foreground=[("selected", GOLD)])
 
-    # ── UI skeleton ──────────────────────────────────────────────────────────────────────────────
+    # ── UI skeleton ────────────────────────────────────────────────────────────
 
     def _build_ui(self):
+        # Title bar
         hdr = tk.Frame(self.root, bg=BG, pady=8)
         hdr.pack(fill="x", padx=20)
         tk.Label(hdr, text="♜  OUROBOROS", fg=GOLD, bg=BG,
@@ -307,6 +309,7 @@ class OuroborosGUI:
                                    fg=RED, bg=BG, font=("Segoe UI", 8))
         self._conn_lbl.pack(side="right")
 
+        # Notebook
         nb = ttk.Notebook(self.root)
         nb.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
@@ -322,9 +325,10 @@ class OuroborosGUI:
         self._build_training_tab(train_tab)
         self._build_settings_tab(settings_tab)
 
-    # ── Live Game tab ─────────────────────────────────────────────────────────────────────────────
+    # ── Live Game tab ─────────────────────────────────────────────────────────
 
     def _build_live_tab(self, parent):
+        # Board column (left)
         left = tk.Frame(parent, bg=BG2)
         left.pack(side="left", fill="y", padx=(16, 10), pady=16)
 
@@ -355,6 +359,7 @@ class OuroborosGUI:
         self._game_link.bind("<Button-1>", self._open_game)
         self._game_url = ""
 
+        # Info column (right)
         right = tk.Frame(parent, bg=BG2)
         right.pack(side="left", fill="both", expand=True,
                    padx=(0, 16), pady=16)
@@ -370,9 +375,9 @@ class OuroborosGUI:
             return v
 
         _section_label(right, "PLAY STATUS")
-        self._mode_val        = _stat_row("Mode")
-        self._mode_switch_val = _stat_row("Mode switch in")
-        self._challenge_val   = _stat_row("Next challenge in")
+        self._mode_val             = _stat_row("Mode")
+        self._mode_switch_val      = _stat_row("Mode switch in")
+        self._challenge_val        = _stat_row("Next challenge in")
 
         _hr(right)
         _section_label(right, "RECORD")
@@ -396,12 +401,64 @@ class OuroborosGUI:
         self._force_btn.pack(anchor="w", pady=(0, 6))
 
         _hr(right)
+        _section_label(right, "CUSTOM CHALLENGE")
+
+        tk.Label(right, text="Opponent username  (blank = auto-pick)",
+                 fg=GREY, bg=BG2, font=("Segoe UI", 8)).pack(anchor="w")
+        self._opp_entry = tk.Entry(
+            right, bg=BG3, fg=FG, insertbackground=FG,
+            font=("Segoe UI", 10), relief="flat",
+            highlightthickness=1, highlightbackground=BG3, highlightcolor=GOLD,
+        )
+        self._opp_entry.pack(fill="x", ipady=4, pady=(2, 8))
+
+        tc_row = tk.Frame(right, bg=BG2)
+        tc_row.pack(anchor="w", pady=(0, 6))
+        tk.Label(tc_row, text="Time:", fg=GREY2, bg=BG2,
+                 font=("Segoe UI", 9)).pack(side="left")
+        self._tc_min = tk.Spinbox(
+            tc_row, from_=1, to=180, width=4,
+            bg=BG3, fg=FG, buttonbackground=BG3, relief="flat",
+            highlightthickness=1, highlightbackground=BG3,
+            font=("Segoe UI", 10),
+        )
+        self._tc_min.delete(0, "end")
+        self._tc_min.insert(0, "10")
+        self._tc_min.pack(side="left", padx=(4, 0))
+        tk.Label(tc_row, text="min  +", fg=GREY2, bg=BG2,
+                 font=("Segoe UI", 9)).pack(side="left", padx=(4, 0))
+        self._tc_inc = tk.Spinbox(
+            tc_row, from_=0, to=60, width=4,
+            bg=BG3, fg=FG, buttonbackground=BG3, relief="flat",
+            highlightthickness=1, highlightbackground=BG3,
+            font=("Segoe UI", 10),
+        )
+        self._tc_inc.delete(0, "end")
+        self._tc_inc.insert(0, "0")
+        self._tc_inc.pack(side="left", padx=(4, 0))
+        tk.Label(tc_row, text="sec", fg=GREY2, bg=BG2,
+                 font=("Segoe UI", 9)).pack(side="left", padx=(4, 0))
+
+        self._challenge_btn = tk.Button(
+            right, text="⚔  Send Challenge",
+            fg=GOLD, bg=BG3,
+            activeforeground=BG, activebackground=GOLD,
+            relief="flat", bd=0,
+            highlightthickness=1, highlightbackground=GOLD,
+            font=("Segoe UI", 9, "bold"),
+            cursor="hand2", padx=12, pady=6,
+            command=self._custom_challenge,
+        )
+        self._challenge_btn.pack(anchor="w", pady=(0, 4))
+
+        _hr(right)
         _section_label(right, "BACKEND")
         self._native_val = _stat_row("Encoding")
 
-    # ── Training tab ──────────────────────────────────────────────────────────────────────────────
+    # ── Training tab ──────────────────────────────────────────────────────────
 
     def _build_training_tab(self, parent):
+        # Scrollable inner frame
         canvas  = tk.Canvas(parent, bg=BG2, highlightthickness=0)
         scrolly = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
         inner   = tk.Frame(canvas, bg=BG2)
@@ -414,8 +471,8 @@ class OuroborosGUI:
             canvas.itemconfig(win_id, width=e.width)
         def _on_inner_configure(e):
             canvas.configure(scrollregion=canvas.bbox("all"))
-        canvas.bind("<Configure>",    _on_resize)
-        inner.bind("<Configure>",     _on_inner_configure)
+        canvas.bind("<Configure>",     _on_resize)
+        inner.bind( "<Configure>",     _on_inner_configure)
 
         def _on_mousewheel(e):
             canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
@@ -423,6 +480,7 @@ class OuroborosGUI:
 
         pad = {"padx": 16}
 
+        # Stat boxes grid
         grid_frame = tk.Frame(inner, bg=BG2)
         grid_frame.pack(fill="x", **pad, pady=(16, 8))
         for c in range(3):
@@ -441,6 +499,7 @@ class OuroborosGUI:
 
         tk.Frame(inner, bg=BG3, height=1).pack(fill="x", **pad, pady=8)
 
+        # Buffer
         buf_frame = tk.Frame(inner, bg=BG2)
         buf_frame.pack(fill="x", **pad, pady=(0, 8))
 
@@ -455,6 +514,7 @@ class OuroborosGUI:
                                        font=("Segoe UI", 8))
         self._buf_info_lbl.pack(anchor="w", pady=(3, 0))
 
+        # Data composition
         _section_label(buf_frame, "DATA COMPOSITION", bg=BG2)
         self._comp_canvas = tk.Canvas(buf_frame, bg=BG3, height=12,
                                        highlightthickness=0)
@@ -466,16 +526,19 @@ class OuroborosGUI:
                                    font=("Segoe UI", 8))
         self._comp_lbl.pack(anchor="w", pady=(4, 0))
 
+        # Legend dots
         leg_frame = tk.Frame(buf_frame, bg=BG2)
         leg_frame.pack(anchor="w", pady=(4, 0))
         for color, label in [(BLUE, "Self-play"), (GOLD, "Lichess"), (PURPLE, "Imitation")]:
-            tk.Label(leg_frame, text="■", fg=color, bg=BG2,
-                     font=("Segoe UI", 9)).pack(side="left")
+            dot = tk.Label(leg_frame, text="■", fg=color, bg=BG2,
+                           font=("Segoe UI", 9))
+            dot.pack(side="left")
             tk.Label(leg_frame, text=label, fg=GREY2, bg=BG2,
                      font=("Segoe UI", 8)).pack(side="left", padx=(0, 12))
 
         tk.Frame(inner, bg=BG3, height=1).pack(fill="x", **pad, pady=8)
 
+        # ELO section
         elo_frame = tk.Frame(inner, bg=BG2)
         elo_frame.pack(fill="x", **pad, pady=(0, 16))
 
@@ -497,7 +560,7 @@ class OuroborosGUI:
         self._elo_chart = Sparkline(elo_right, color=GOLD, width=380, height=80)
         self._elo_chart.pack(fill="x")
 
-    # ── Settings tab ──────────────────────────────────────────────────────────────────────────────
+    # ── Settings tab ─────────────────────────────────────────────────────────
 
     def _build_settings_tab(self, parent):
         outer = tk.Frame(parent, bg=BG2)
@@ -543,6 +606,7 @@ class OuroborosGUI:
             "hf_token", show="•",
         )
 
+        # Show / hide toggles
         toggle_row = tk.Frame(outer, bg=BG2)
         toggle_row.pack(anchor="w", pady=(6, 0))
 
@@ -588,7 +652,7 @@ class OuroborosGUI:
                  font=("Segoe UI", 8), justify="left",
                  anchor="w").pack(anchor="w")
 
-    # ── Polling ───────────────────────────────────────────────────────────────────────────────────────
+    # ── Polling ───────────────────────────────────────────────────────────────
 
     def _start_polling(self):
         t = threading.Thread(target=self._poll_loop, daemon=True)
@@ -619,11 +683,12 @@ class OuroborosGUI:
             fg=GREEN if ok else RED,
         )
 
-    # ── State application ─────────────────────────────────────────────────────────────────────────────
+    # ── State application ─────────────────────────────────────────────────────
 
     def _apply_state(self, d: dict):
         self._state = d
 
+        # ── Live tab ──
         game_id  = d.get("game_id")
         last_id  = d.get("last_game_id")
         opp      = d.get("opponent_username")
@@ -632,6 +697,7 @@ class OuroborosGUI:
         revenge  = d.get("is_revenge", False)
         bot_name = d.get("bot_username", "OUROBOROS")
 
+        # Badges
         for w in self._badge_frame.winfo_children():
             w.pack_forget()
         if game_id:
@@ -641,6 +707,7 @@ class OuroborosGUI:
         elif last_id:
             self._badge_ended.pack(side="left")
 
+        # Matchup
         if game_id and opp and our_col:
             white = bot_name if our_col == "white" else opp
             black = bot_name if our_col == "black" else opp
@@ -648,12 +715,14 @@ class OuroborosGUI:
         else:
             self._matchup_lbl.config(text="Waiting for a game…", fg=GREY2)
 
+        # Board
         flipped = (our_col == "black")
         frm_sqs, to_sqs = _diff_fen(self._prev_fen, fen)
         self._board.set_position(fen, flipped=flipped,
                                  from_sqs=frm_sqs, to_sqs=to_sqs)
         self._prev_fen = fen
 
+        # Lichess link
         view_id = game_id or last_id
         if view_id:
             self._game_url = f"https://lichess.org/{view_id}"
@@ -662,17 +731,21 @@ class OuroborosGUI:
             self._game_url = ""
             self._game_link.config(text="")
 
+        # Mode
         mode = d.get("play_mode", "lichess")
         if mode == "lichess":
             self._mode_val.config(text="● Lichess", fg=GREEN)
         else:
             self._mode_val.config(text="△ Self-play", fg=GOLD)
 
+        # Force-game button state
         if game_id:
             self._force_btn.config(text="■  In Game", state="disabled")
         else:
-            self._force_btn.config(text="▶  Play One Game", state="normal", fg=GOLD)
+            self._force_btn.config(text="▶  Play One Game", state="normal",
+                                   fg=GOLD)
 
+        # Record
         w_n  = d.get("total_wins",   0)
         dr_n = d.get("total_draws",  0)
         l_n  = d.get("total_losses", 0)
@@ -686,6 +759,7 @@ class OuroborosGUI:
         else:
             self._score_val.config(text="—", fg=GREY)
 
+        # Native backend
         hn = d.get("has_native")
         if hn is True:
             self._native_val.config(text="Rust (native)", fg=GREEN)
@@ -694,6 +768,7 @@ class OuroborosGUI:
         else:
             self._native_val.config(text="Unknown", fg=GREY)
 
+        # ── Training tab ──
         sp    = d.get("selfplay_games",  0)
         steps = d.get("train_steps",     0)
         spm   = d.get("steps_per_min",   0)
@@ -720,19 +795,22 @@ class OuroborosGUI:
         if ph: self._box_ploss.set_spark(ph)
         if vh: self._box_vloss.set_spark(vh)
 
+        # Buffer
         self._buf_fill_pct = min(1.0, bf / bc) if bc > 0 else 0.0
         self._redraw_buf()
         self._buf_info_lbl.config(
             text=f"{self._buf_fill_pct*100:.0f}%  —  {bf:,} / {bc:,} positions")
 
+        # Composition
         self._comp_data = src
         self._redraw_comp()
-        sp_n = src.get("selfplay",  0)
-        li_n = src.get("live",      0)
-        im_n = src.get("imitation", 0)
+        sp_n = src.get("selfplay",   0)
+        li_n = src.get("live",       0)
+        im_n = src.get("imitation",  0)
         self._comp_lbl.config(
             text=f"Self-play: {sp_n:,}   Lichess: {li_n:,}   Imitation: {im_n:,}")
 
+        # ELO
         self._elo_num.config(text=str(round(elo)))
         if len(eloh) >= 2:
             delta = elo - eloh[-2]
@@ -745,7 +823,7 @@ class OuroborosGUI:
         if len(eloh) >= 2:
             self._elo_chart.set_values(eloh)
 
-    # ── Canvas redraws ────────────────────────────────────────────────────────────────────────────────
+    # ── Canvas redraws ────────────────────────────────────────────────────────
 
     def _redraw_buf(self, _event=None):
         c = self._buf_canvas
@@ -770,8 +848,8 @@ class OuroborosGUI:
         total = sum(src.values()) if src else 0
         c.create_rectangle(0, 0, w, h, fill=BG3, outline="")
         if total:
-            sp_w = int(w * src.get("selfplay", 0) / total)
-            li_w = int(w * src.get("live",     0) / total)
+            sp_w = int(w * src.get("selfplay",  0) / total)
+            li_w = int(w * src.get("live",      0) / total)
             im_w = w - sp_w - li_w
             x = 0
             for width, color in [(sp_w, BLUE), (li_w, GOLD), (im_w, PURPLE)]:
@@ -779,7 +857,7 @@ class OuroborosGUI:
                     c.create_rectangle(x, 0, x + width, h, fill=color, outline="")
                     x += width
 
-    # ── Countdown tick ───────────────────────────────────────────────────────────────────────────────
+    # ── Countdown tick (runs in main thread every second) ─────────────────────
 
     def _tick(self):
         now = time.time()
@@ -806,7 +884,7 @@ class OuroborosGUI:
 
         self.root.after(1000, self._tick)
 
-    # ── Actions ───────────────────────────────────────────────────────────────────────────────────────
+    # ── Actions ───────────────────────────────────────────────────────────────
 
     def _force_game(self):
         if not HAS_REQUESTS:
@@ -832,6 +910,42 @@ class OuroborosGUI:
 
         threading.Thread(target=_do, daemon=True).start()
 
+    def _custom_challenge(self):
+        if not HAS_REQUESTS:
+            messagebox.showerror("Missing dependency",
+                                 "pip install requests\nthen restart the GUI.")
+            return
+        url      = self.settings.get("bot_url", "http://localhost:8080").rstrip("/")
+        username = self._opp_entry.get().strip()
+        try:
+            time_limit = max(1, int(self._tc_min.get()))
+            increment  = max(0, int(self._tc_inc.get()))
+        except ValueError:
+            messagebox.showerror("Invalid input", "Time and increment must be numbers.")
+            return
+
+        self._challenge_btn.config(text="Sending…", state="disabled")
+
+        def _do():
+            try:
+                resp = requests.post(
+                    f"{url}/api/challenge",
+                    json={"username": username, "time_limit": time_limit, "increment": increment},
+                    timeout=5,
+                )
+                ok = resp.json().get("ok", False)
+            except Exception:
+                ok = False
+            color = GREEN if ok else RED
+            label = "✓  Sent!" if ok else "✗  Failed"
+            self.root.after(0, lambda: self._challenge_btn.config(
+                text=label, fg=color, state="disabled"))
+            time.sleep(2.5)
+            self.root.after(0, lambda: self._challenge_btn.config(
+                text="⚔  Send Challenge", fg=GOLD, state="normal"))
+
+        threading.Thread(target=_do, daemon=True).start()
+
     def _open_game(self, _event=None):
         if self._game_url:
             import webbrowser
@@ -841,7 +955,7 @@ class OuroborosGUI:
         self.settings["bot_url"]       = self._url_e.get().strip()
         self.settings["lichess_token"] = self._lichess_e.get().strip()
         self.settings["hf_token"]      = self._hf_e.get().strip()
-        _save_settings(self.settings)
+        _save_gui_settings(self.settings)
         messagebox.showinfo("Saved",
                             "Settings saved to gui_settings.json\n\n"
                             "The new bot URL will be used on the next poll.")
@@ -851,12 +965,13 @@ class OuroborosGUI:
         self.root.destroy()
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────────────────────────
+# ── Entry point ───────────────────────────────────────────────────────────────
 
 def main():
     root = tk.Tk()
     root.title("OUROBOROS")
 
+    # Attempt to set a chess-piece window icon (silent if it fails)
     try:
         img = tk.PhotoImage(width=1, height=1)
         root.iconphoto(True, img)

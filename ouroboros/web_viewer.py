@@ -601,7 +601,7 @@ _HTML = b"""<!DOCTYPE html>
     setInterval(tick, 3000);
   </script>
 </body>
-</html>""".
+</html>"""
 
 
 def update_game(game_id=None) -> None:
