@@ -401,6 +401,57 @@ class OuroborosGUI:
         self._force_btn.pack(anchor="w", pady=(0, 6))
 
         _hr(right)
+        _section_label(right, "CUSTOM CHALLENGE")
+
+        tk.Label(right, text="Opponent username  (blank = auto-pick)",
+                 fg=GREY, bg=BG2, font=("Segoe UI", 8)).pack(anchor="w")
+        self._opp_entry = tk.Entry(
+            right, bg=BG3, fg=FG, insertbackground=FG,
+            font=("Segoe UI", 10), relief="flat",
+            highlightthickness=1, highlightbackground=BG3, highlightcolor=GOLD,
+        )
+        self._opp_entry.pack(fill="x", ipady=4, pady=(2, 8))
+
+        tc_row = tk.Frame(right, bg=BG2)
+        tc_row.pack(anchor="w", pady=(0, 6))
+        tk.Label(tc_row, text="Time:", fg=GREY2, bg=BG2,
+                 font=("Segoe UI", 9)).pack(side="left")
+        self._tc_min = tk.Spinbox(
+            tc_row, from_=1, to=180, width=4,
+            bg=BG3, fg=FG, buttonbackground=BG3, relief="flat",
+            highlightthickness=1, highlightbackground=BG3,
+            font=("Segoe UI", 10),
+        )
+        self._tc_min.delete(0, "end")
+        self._tc_min.insert(0, "10")
+        self._tc_min.pack(side="left", padx=(4, 0))
+        tk.Label(tc_row, text="min  +", fg=GREY2, bg=BG2,
+                 font=("Segoe UI", 9)).pack(side="left", padx=(4, 0))
+        self._tc_inc = tk.Spinbox(
+            tc_row, from_=0, to=60, width=4,
+            bg=BG3, fg=FG, buttonbackground=BG3, relief="flat",
+            highlightthickness=1, highlightbackground=BG3,
+            font=("Segoe UI", 10),
+        )
+        self._tc_inc.delete(0, "end")
+        self._tc_inc.insert(0, "0")
+        self._tc_inc.pack(side="left", padx=(4, 0))
+        tk.Label(tc_row, text="sec", fg=GREY2, bg=BG2,
+                 font=("Segoe UI", 9)).pack(side="left", padx=(4, 0))
+
+        self._challenge_btn = tk.Button(
+            right, text="⚔  Send Challenge",
+            fg=GOLD, bg=BG3,
+            activeforeground=BG, activebackground=GOLD,
+            relief="flat", bd=0,
+            highlightthickness=1, highlightbackground=GOLD,
+            font=("Segoe UI", 9, "bold"),
+            cursor="hand2", padx=12, pady=6,
+            command=self._custom_challenge,
+        )
+        self._challenge_btn.pack(anchor="w", pady=(0, 4))
+
+        _hr(right)
         _section_label(right, "BACKEND")
         self._native_val = _stat_row("Encoding")
 
@@ -856,6 +907,42 @@ class OuroborosGUI:
             time.sleep(2.5)
             self.root.after(0, lambda: self._force_btn.config(
                 text="▶  Play One Game", fg=GOLD, state="normal"))
+
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _custom_challenge(self):
+        if not HAS_REQUESTS:
+            messagebox.showerror("Missing dependency",
+                                 "pip install requests\nthen restart the GUI.")
+            return
+        url      = self.settings.get("bot_url", "http://localhost:8080").rstrip("/")
+        username = self._opp_entry.get().strip()
+        try:
+            time_limit = max(1, int(self._tc_min.get()))
+            increment  = max(0, int(self._tc_inc.get()))
+        except ValueError:
+            messagebox.showerror("Invalid input", "Time and increment must be numbers.")
+            return
+
+        self._challenge_btn.config(text="Sending…", state="disabled")
+
+        def _do():
+            try:
+                resp = requests.post(
+                    f"{url}/api/challenge",
+                    json={"username": username, "time_limit": time_limit, "increment": increment},
+                    timeout=5,
+                )
+                ok = resp.json().get("ok", False)
+            except Exception:
+                ok = False
+            color = GREEN if ok else RED
+            label = "✓  Sent!" if ok else "✗  Failed"
+            self.root.after(0, lambda: self._challenge_btn.config(
+                text=label, fg=color, state="disabled"))
+            time.sleep(2.5)
+            self.root.after(0, lambda: self._challenge_btn.config(
+                text="⚔  Send Challenge", fg=GOLD, state="normal"))
 
         threading.Thread(target=_do, daemon=True).start()
 

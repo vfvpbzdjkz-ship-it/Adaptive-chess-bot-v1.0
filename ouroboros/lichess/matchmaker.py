@@ -62,6 +62,28 @@ class Matchmaker:
         except Exception as e:
             log.error("challenge_once error: %s", e, exc_info=True)
 
+    def challenge_once_with_tc(self, time_limit: int, increment: int) -> None:
+        """One auto-pick challenge cycle with a custom time control."""
+        try:
+            self._cycle(time_limit_override=time_limit, increment_override=increment)
+        except Exception as e:
+            log.error("challenge_once_with_tc error: %s", e, exc_info=True)
+
+    def challenge_specific(self, username: str, time_limit: int, increment: int) -> None:
+        """Directly challenge a named opponent with the given time control."""
+        if self._in_game:
+            log.debug("challenge_specific: skipping — game in progress")
+            return
+        log.info("Challenging %s (%d+%d) [user-specified]", username, time_limit, increment)
+        try:
+            result = self.client.challenge_player(username, time_limit, increment, rated=False)
+            if result:
+                self._challenges_this_hour += 1
+            else:
+                log.debug("Challenge to %s returned no data", username)
+        except Exception as e:
+            log.error("challenge_specific to %s failed: %s", username, e)
+
     def _loop(self) -> None:
         while not self._stop_event.wait(CHALLENGE_INTERVAL):
             try:
@@ -70,7 +92,7 @@ class Matchmaker:
                 log.error("Matchmaker cycle error (will retry next interval): %s", e, exc_info=True)
             _set_next_challenge(time.time() + CHALLENGE_INTERVAL)
 
-    def _cycle(self) -> None:
+    def _cycle(self, time_limit_override=None, increment_override=None) -> None:
         """One challenge attempt cycle."""
         # Don't send a challenge while already in a game
         if self._in_game:
@@ -86,8 +108,8 @@ class Matchmaker:
         if self._challenges_this_hour >= max_per_hour:
             return
 
-        t_limit = self.cfg.get("matchmaker_time", 10)
-        t_inc = self.cfg.get("matchmaker_increment", 5)
+        t_limit = time_limit_override if time_limit_override is not None else self.cfg.get("matchmaker_time", 10)
+        t_inc = increment_override if increment_override is not None else self.cfg.get("matchmaker_increment", 5)
         tried: set[str] = set()
 
         for attempt in range(MAX_RETRIES):

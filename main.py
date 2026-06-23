@@ -87,7 +87,7 @@ def run_auto(cfg: dict) -> None:
     from ouroboros.sync import pull_latest, PeriodicSync
     from ouroboros.web_viewer import (
         update_game, update_training_stats, load_elo_history,
-        set_force_game_callback, set_native_status,
+        set_force_game_callback, set_challenge_callback, set_native_status,
     )
     from ouroboros.scheduler import PlayScheduler
 
@@ -162,6 +162,7 @@ def run_auto(cfg: dict) -> None:
     play_scheduler = PlayScheduler(matchmaker)
     play_scheduler.start()   # starts in Lichess mode; matchmaker started inside
     set_force_game_callback(play_scheduler.force_one_game)
+    set_challenge_callback(play_scheduler.challenge_with_options)
     periodic_sync = PeriodicSync(cfg, interval_minutes=15)
     periodic_sync.start()
 
