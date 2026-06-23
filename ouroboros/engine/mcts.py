@@ -107,7 +107,12 @@ class MCTS:
         node.expanded = True
 
     def _puct_score(self, node: Node, parent_n: int) -> float:
-        q = node.q
+        # node.q is stored from node's OWN side-to-move perspective (see _backup),
+        # which is the opponent of the parent's side to move. Negate it so we
+        # select the move that is best for the parent -- the side actually
+        # choosing this move. Without this negation the search maximizes the
+        # opponent's value, i.e. it actively plays the worst move every turn.
+        q = -node.q
         u = self.c_puct * node.p * math.sqrt(parent_n) / (1 + node.n + node.virtual_loss)
         return q + u
 
