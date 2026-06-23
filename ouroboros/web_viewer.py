@@ -23,6 +23,7 @@ _STARTING_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
 _lock = threading.Lock()
 _force_game_callback = None
+_challenge_callback = None   # fn(username: str, time_limit: int, increment: int)
 _state: dict = {
     "game_id": None,
     "last_game_id": None,
@@ -600,7 +601,7 @@ _HTML = b"""<!DOCTYPE html>
     setInterval(tick, 3000);
   </script>
 </body>
-</html>"""
+</html>""".
 
 
 def update_game(game_id=None) -> None:
@@ -737,6 +738,12 @@ def set_force_game_callback(fn) -> None:
     _force_game_callback = fn
 
 
+def set_challenge_callback(fn) -> None:
+    """Register fn(username, time_limit, increment) for custom challenges."""
+    global _challenge_callback
+    _challenge_callback = fn
+
+
 def load_elo_history() -> None:
     """Seed elo_history from the DB ladder table on startup."""
     try:
@@ -765,8 +772,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         content_length = int(self.headers.get("Content-Length", 0))
-        if content_length > 0:
-            self.rfile.read(content_length)
+        body = self.rfile.read(content_length) if content_length > 0 else b""
+
         if self.path == "/api/force-game":
             cb = _force_game_callback
             if cb is not None:
@@ -778,6 +785,29 @@ class _Handler(BaseHTTPRequestHandler):
                     self._send(500, "application/json", b'{"ok":false}')
             else:
                 self._send(503, "application/json", b'{"ok":false,"error":"not_configured"}')
+
+        elif self.path == "/api/challenge":
+            try:
+                data = json.loads(body) if body else {}
+            except Exception:
+                data = {}
+            username = str(data.get("username", "")).strip()
+            try:
+                time_limit = max(1, int(data.get("time_limit", 10)))
+                increment  = max(0, int(data.get("increment",  0)))
+            except (ValueError, TypeError):
+                time_limit, increment = 10, 0
+            cb = _challenge_callback
+            if cb is not None:
+                try:
+                    cb(username, time_limit, increment)
+                    self._send(200, "application/json", b'{"ok":true}')
+                except Exception as e:
+                    log.warning("challenge callback failed: %s", e)
+                    self._send(500, "application/json", b'{"ok":false}')
+            else:
+                self._send(503, "application/json", b'{"ok":false,"error":"not_configured"}')
+
         else:
             self._send(404, "text/plain", b"not found")
 
