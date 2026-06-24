@@ -39,7 +39,7 @@ RUN ( curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     || echo "Native acceleration unavailable; using pure-Python encoding."
 
 RUN mkdir -p data/models data/buffer data/logs
-# bust cache if needed: 2026-06-15
+# bust cache if needed: 2026-06-24
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
