@@ -67,7 +67,7 @@ class ReplayBuffer:
             actual_bytes = path.stat().st_size
             if actual_bytes == expected_bytes:
                 return np.memmap(str(path), dtype=dtype, mode="r+", shape=shape)
-            # Wrong size -- from a failed/resized deployment. Delete and recreate.
+            # Wrong size — from a failed/resized deployment. Delete and recreate.
             log.warning("Buffer %s: expected %d bytes, found %d; recreating",
                         path.name, expected_bytes, actual_bytes)
             path.unlink()
@@ -158,6 +158,19 @@ class ReplayBuffer:
     def flush(self) -> None:
         with self._lock:
             self._flush_and_save()
+
+    def clear(self) -> None:
+        """Zero out all stored positions (in-memory + on disk). Use after a weight reset."""
+        with self._lock:
+            self._states[:] = 0
+            self._policies[:] = 0
+            self._values[:] = 0
+            self._weights[:] = 0
+            self._sources[:] = 0
+            self._write_ptr = 0
+            self._count = 0
+            self._flush_and_save()
+        log.warning("ReplayBuffer cleared (%d positions wiped)", self.capacity)
 
     def source_counts(self) -> dict:
         """Return how many stored positions came from each source.

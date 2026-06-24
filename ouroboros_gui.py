@@ -661,6 +661,30 @@ class OuroborosGUI:
 
         tk.Frame(outer, bg=BG3, height=1).pack(fill="x", pady=16)
 
+        tk.Label(outer, text="Danger Zone",
+                 fg=RED, bg=BG2, font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        tk.Label(outer,
+                 text=(
+                     "Reset Model wipes all checkpoints and the replay buffer, then\n"
+                     "reinitialises the network to random weights. The bot will\n"
+                     "relearn from scratch. Use this if training got corrupted."
+                 ),
+                 fg=GREY2, bg=BG2, font=("Segoe UI", 8), justify="left").pack(anchor="w", pady=(4, 8))
+
+        self._reset_btn = tk.Button(
+            outer, text="⚠  Reset Model (cannot be undone)",
+            fg=RED, bg=BG3,
+            activeforeground=BG, activebackground=RED,
+            relief="flat", bd=0,
+            highlightthickness=1, highlightbackground=RED,
+            font=("Segoe UI", 9, "bold"),
+            cursor="hand2", padx=12, pady=6,
+            command=self._reset_model,
+        )
+        self._reset_btn.pack(anchor="w")
+
+        tk.Frame(outer, bg=BG3, height=1).pack(fill="x", pady=16)
+
         note_text = (
             "ℹ  Railway deployment — set these as environment variables in your project:\n\n"
             "     LICHESS_TOKEN = <your lichess token>\n"
@@ -1019,6 +1043,47 @@ class OuroborosGUI:
         messagebox.showinfo("Saved",
                             "Settings saved to gui_settings.json\n\n"
                             "The new bot URL will be used on the next poll.")
+
+    def _reset_model(self):
+        if not HAS_REQUESTS:
+            messagebox.showerror("Missing dependency",
+                                 "pip install requests\nthen restart the GUI.")
+            return
+        confirmed = messagebox.askyesno(
+            "Reset Model — Are you sure?",
+            "This will:\n"
+            "  • Delete ALL checkpoint files (best.pt, latest.pt, ckpt_*.pt)\n"
+            "  • Clear the entire replay buffer (1M positions)\n"
+            "  • Reset the network to random weights\n\n"
+            "The bot will relearn from scratch with correct MCTS.\n\n"
+            "This CANNOT be undone. Continue?",
+            icon="warning",
+        )
+        if not confirmed:
+            return
+        url = self.settings.get("bot_url", "http://localhost:8080").rstrip("/")
+        self._reset_btn.config(text="Resetting…", state="disabled")
+
+        def _do():
+            try:
+                resp = requests.post(f"{url}/api/reset-model", timeout=30)
+                data = resp.json()
+                ok   = data.get("ok", False)
+                removed = data.get("removed", "?")
+            except Exception as e:
+                ok = False
+                removed = str(e)
+            if ok:
+                label = f"✓  Done — {removed} file(s) deleted. Bot is now relearning."
+                color = GREEN
+            else:
+                label = f"✗  Failed: {removed}"
+                color = RED
+            self.root.after(0, lambda: messagebox.showinfo("Reset Model", label))
+            self.root.after(0, lambda: self._reset_btn.config(
+                text="⚠  Reset Model (cannot be undone)", fg=RED, state="normal"))
+
+        threading.Thread(target=_do, daemon=True).start()
 
     def _on_close(self):
         self._stop.set()
