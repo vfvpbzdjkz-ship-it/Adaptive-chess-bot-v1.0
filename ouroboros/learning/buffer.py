@@ -159,6 +159,19 @@ class ReplayBuffer:
         with self._lock:
             self._flush_and_save()
 
+    def clear(self) -> None:
+        """Zero out all stored positions (in-memory + on disk). Use after a weight reset."""
+        with self._lock:
+            self._states[:] = 0
+            self._policies[:] = 0
+            self._values[:] = 0
+            self._weights[:] = 0
+            self._sources[:] = 0
+            self._write_ptr = 0
+            self._count = 0
+            self._flush_and_save()
+        log.warning("ReplayBuffer cleared (%d positions wiped)", self.capacity)
+
     def source_counts(self) -> dict:
         """Return how many stored positions came from each source.
 

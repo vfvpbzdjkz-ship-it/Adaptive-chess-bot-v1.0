@@ -88,6 +88,7 @@ def run_auto(cfg: dict) -> None:
     from ouroboros.web_viewer import (
         update_game, update_training_stats, load_elo_history,
         set_force_game_callback, set_challenge_callback, set_native_status,
+        set_reset_callback,
     )
     from ouroboros.scheduler import PlayScheduler
 
@@ -163,6 +164,29 @@ def run_auto(cfg: dict) -> None:
     play_scheduler.start()   # starts in Lichess mode; matchmaker started inside
     set_force_game_callback(play_scheduler.force_one_game)
     set_challenge_callback(play_scheduler.challenge_with_options)
+
+    def _do_reset() -> dict:
+        """Delete checkpoints + clear buffer so the bot relearns from scratch."""
+        import glob as _glob
+        removed = 0
+        for pattern in ["data/models/*.pt", "data/buffer/*.npy", "data/buffer/*.npz"]:
+            for f in _glob.glob(pattern):
+                try:
+                    os.remove(f)
+                    removed += 1
+                    log.warning("reset-model: removed %s", f)
+                except OSError as e:
+                    log.warning("reset-model: could not remove %s: %s", f, e)
+        buffer.clear()
+        # Reinitialise network weights in-place so inference improves immediately
+        from ouroboros.engine.network import build_net as _bn
+        fresh = _bn(cfg, device)
+        net.load_state_dict(fresh.state_dict())
+        net.eval()
+        log.warning("reset-model: weights reset to random; %d file(s) deleted", removed)
+        return {"removed": removed}
+
+    set_reset_callback(_do_reset)
     periodic_sync = PeriodicSync(cfg, interval_minutes=15)
     periodic_sync.start()
 
@@ -332,6 +356,21 @@ def main() -> None:
     # Ensure data directories exist
     for d in ["data", "data/models", "data/buffer", "data/logs"]:
         Path(d).mkdir(parents=True, exist_ok=True)
+
+    # RESET_ON_START: wipe model checkpoints + buffer so the bot relearns from
+    # scratch.  Set this env var in Railway, redeploy once, then remove it.
+    if os.environ.get("RESET_ON_START"):
+        import glob as _glob
+        removed = []
+        for pattern in ["data/models/*.pt", "data/buffer/*.npy", "data/buffer/*.npz"]:
+            for f in _glob.glob(pattern):
+                try:
+                    os.remove(f)
+                    removed.append(f)
+                except OSError:
+                    pass
+        log.warning("RESET_ON_START: removed %d file(s): %s", len(removed),
+                    ", ".join(removed) or "(none found)")
 
     # Always init DB on boot — /tmp is wiped on container restart so tables
     # must be recreated even when config.json already exists on the volume.

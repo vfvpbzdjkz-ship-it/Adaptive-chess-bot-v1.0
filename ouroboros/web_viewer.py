@@ -744,6 +744,15 @@ def set_challenge_callback(fn) -> None:
     _challenge_callback = fn
 
 
+_reset_callback = None   # fn() → dict with keys "removed" (int), "error" (str|None)
+
+
+def set_reset_callback(fn) -> None:
+    """Register fn() called by the /api/reset-model endpoint."""
+    global _reset_callback
+    _reset_callback = fn
+
+
 def load_elo_history() -> None:
     """Seed elo_history from the DB ladder table on startup."""
     try:
@@ -804,6 +813,19 @@ class _Handler(BaseHTTPRequestHandler):
                     self._send(200, "application/json", b'{"ok":true}')
                 except Exception as e:
                     log.warning("challenge callback failed: %s", e)
+                    self._send(500, "application/json", b'{"ok":false}')
+            else:
+                self._send(503, "application/json", b'{"ok":false,"error":"not_configured"}')
+
+        elif self.path == "/api/reset-model":
+            cb = _reset_callback
+            if cb is not None:
+                try:
+                    info = cb()
+                    payload = json.dumps({"ok": True, "removed": info.get("removed", 0)}).encode()
+                    self._send(200, "application/json", payload)
+                except Exception as e:
+                    log.warning("reset-model callback failed: %s", e)
                     self._send(500, "application/json", b'{"ok":false}')
             else:
                 self._send(503, "application/json", b'{"ok":false,"error":"not_configured"}')
