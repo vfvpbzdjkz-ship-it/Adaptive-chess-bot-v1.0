@@ -178,11 +178,14 @@ def run_auto(cfg: dict) -> None:
                 except OSError as e:
                     log.warning("reset-model: could not remove %s: %s", f, e)
         buffer.clear()
-        # Reinitialise network weights in-place so inference improves immediately
-        from ouroboros.engine.network import build_net as _bn
-        fresh = _bn(cfg, device)
-        net.load_state_dict(fresh.state_dict())
-        net.eval()
+        # Reinitialise network weights in-place. Acquire the trainer's step lock so
+        # we wait for any in-flight forward/backward pass to finish before overwriting
+        # parameters — avoids corrupting gradients or producing a torn read in MCTS.
+        with trainer._step_lock:
+            from ouroboros.engine.network import build_net as _bn
+            fresh = _bn(cfg, device)
+            net.load_state_dict(fresh.state_dict())
+            net.eval()
         log.warning("reset-model: weights reset to random; %d file(s) deleted", removed)
         return {"removed": removed}
 

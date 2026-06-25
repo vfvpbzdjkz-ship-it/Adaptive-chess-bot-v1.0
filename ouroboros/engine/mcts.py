@@ -258,7 +258,7 @@ class MCTS:
                     self._backup(path_item, val)
                 done += len(batch)
 
-        self._sims_done += remaining
+        self._sims_done += done  # track actual sims run, not intended budget
 
         # Build visit distribution
         visit_dist = np.zeros(4672, dtype=np.float32)

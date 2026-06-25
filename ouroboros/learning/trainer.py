@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import chess
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -80,6 +81,9 @@ class Trainer:
         self._last_value_loss: Optional[float] = None
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        # Held during the forward/backward/optimizer step so that an external
+        # reset (net.load_state_dict) can safely wait for any in-flight step.
+        self._step_lock = threading.Lock()
 
     def _update_lr(self) -> None:
         lr = _cosine_lr(self.step, self.lr_init, self.lr_final, self.lr_steps)
@@ -108,13 +112,14 @@ class Trainer:
         weights = weights / (weights.mean() + 1e-8)
 
         self._update_lr()
-        self.net.train()  # activate BatchNorm batch stats + update running stats
-        self.optimizer.zero_grad()
-        loss, pl, vl = compute_loss(self.net, states, policies, values, weights, self.l2_coef)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.net.parameters(), 1.0)
-        self.optimizer.step()
-        self.net.eval()   # restore eval mode for MCTS inference
+        with self._step_lock:
+            self.net.train()  # activate BatchNorm batch stats + update running stats
+            self.optimizer.zero_grad()
+            loss, pl, vl = compute_loss(self.net, states, policies, values, weights, self.l2_coef)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.net.parameters(), 1.0)
+            self.optimizer.step()
+            self.net.eval()   # restore eval mode for MCTS inference
 
         self.step += 1
         meta_set("train_step", str(self.step))
@@ -204,7 +209,7 @@ class Trainer:
             score = (wins + 0.5 * draws) / max(n, 1)
             expected = 1 / (1 + 10 ** (0.0 / 400))  # symmetric match
             k = 32
-            new_elo = prev_elo + k * (score - expected) * n
+            new_elo = prev_elo + k * (score - expected)
             import datetime
             conn.execute(
                 "INSERT INTO ladder(checkpoint, elo, games_played, wins, timestamp) VALUES(?,?,?,?,?)",
@@ -278,6 +283,3 @@ def _ladder_game(
     if board.is_checkmate():
         return -1.0 if board.turn == chess.WHITE else 1.0
     return 0.0
-
-
-import chess

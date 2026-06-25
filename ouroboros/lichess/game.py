@@ -242,11 +242,15 @@ class GameRunner:
                 )
             self.timeman.record(sims, t.elapsed)
 
-            # Get root value for resign/draw checks
+            # Get root value for resign/draw checks.
+            # After search(), _root has been advanced to the chosen node (opponent's
+            # turn). Its children are the opponent's replies; each child's .q is stored
+            # from that child's side-to-move, which is back to our color. So best.q is
+            # already from our perspective — no negation needed.
             root_val = 0.0
             if self.mcts._root and self.mcts._root.children:
                 best = max(self.mcts._root.children, key=lambda c: c.n)
-                root_val = -best.q  # from our perspective
+                root_val = best.q  # from our perspective
 
             self._our_move_values.append(root_val)
 
@@ -284,7 +288,7 @@ class GameRunner:
             root_val = 0.0
             if self.mcts._root.children:
                 best = max(self.mcts._root.children, key=lambda c: c.n)
-                root_val = -best.q
+                root_val = best.q  # same sign convention as resign check
             if abs(root_val) <= DRAW_THRESHOLD:
                 try:
                     self.client.post(f"/api/bot/game/{self.game_id}/draw/yes")

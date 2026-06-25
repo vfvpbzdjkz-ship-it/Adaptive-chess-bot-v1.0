@@ -30,13 +30,15 @@ class Matchmaker:
         self.on_game_start = on_game_start
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._lock = threading.Lock()
         self._challenges_this_hour = 0
         self._hour_start = time.time()
         self._in_game = False   # set True while a Lichess game is active
 
     def set_in_game(self, active: bool) -> None:
         """Call with True when a game starts, False when it ends."""
-        self._in_game = active
+        with self._lock:
+            self._in_game = active
 
     def start(self) -> None:
         if not self.cfg.get("matchmaker_enabled", True):
@@ -71,14 +73,16 @@ class Matchmaker:
 
     def challenge_specific(self, username: str, time_limit: int, increment: int) -> None:
         """Directly challenge a named opponent with the given time control."""
-        if self._in_game:
-            log.debug("challenge_specific: skipping — game in progress")
-            return
+        with self._lock:
+            if self._in_game:
+                log.debug("challenge_specific: skipping — game in progress")
+                return
         log.info("Challenging %s (%d+%d) [user-specified]", username, time_limit, increment)
         try:
             result = self.client.challenge_player(username, time_limit, increment, rated=False)
             if result:
-                self._challenges_this_hour += 1
+                with self._lock:
+                    self._challenges_this_hour += 1
             else:
                 log.debug("Challenge to %s returned no data", username)
         except Exception as e:
@@ -94,26 +98,23 @@ class Matchmaker:
 
     def _cycle(self, time_limit_override=None, increment_override=None) -> None:
         """One challenge attempt cycle."""
-        # Don't send a challenge while already in a game
-        if self._in_game:
-            log.debug("Matchmaker: skipping challenge -- game in progress")
-            return
-
-        # Reset hourly counter
-        if time.time() - self._hour_start >= 3600:
-            self._challenges_this_hour = 0
-            self._hour_start = time.time()
-
-        max_per_hour = self.cfg.get("matchmaker_max_per_hour", MAX_PER_HOUR)
-        if self._challenges_this_hour >= max_per_hour:
-            return
+        with self._lock:
+            if self._in_game:
+                log.debug("Matchmaker: skipping challenge -- game in progress")
+                return
+            if time.time() - self._hour_start >= 3600:
+                self._challenges_this_hour = 0
+                self._hour_start = time.time()
+            max_per_hour = self.cfg.get("matchmaker_max_per_hour", MAX_PER_HOUR)
+            if self._challenges_this_hour >= max_per_hour:
+                return
 
         t_limit = time_limit_override if time_limit_override is not None else self.cfg.get("matchmaker_time", 10)
         t_inc = increment_override if increment_override is not None else self.cfg.get("matchmaker_increment", 5)
         tried: set[str] = set()
 
         for attempt in range(MAX_RETRIES):
-            target = self._pick_target(exclude=tried)
+            target = self._pick_target(exclude=tried, time_limit=t_limit)
             if not target:
                 break
 
@@ -128,13 +129,14 @@ class Matchmaker:
             try:
                 result = self.client.challenge_player(username, t_limit, t_inc, rated=False)
                 if result is not None:
-                    self._challenges_this_hour += 1
+                    with self._lock:
+                        self._challenges_this_hour += 1
                     break
                 log.debug("Challenge to %s returned no data; trying another bot", username)
             except Exception as e:
                 log.debug("Challenge to %s failed (%s); trying another bot", username, e)
 
-    def _pick_target(self, exclude: set[str] | None = None) -> Optional[dict]:
+    def _pick_target(self, exclude: set[str] | None = None, time_limit: int | None = None) -> Optional[dict]:
         """Pick a bot to challenge. Prefer revenge targets; filter out very strong bots."""
         exclude = exclude or set()
 
@@ -156,7 +158,7 @@ class Matchmaker:
             return {"id": random.choice(revenge_targets)}
 
         # ELO-aware random bot selection: prefer bots ≤ 1800 ELO (skip Stockfish-tier)
-        t_limit = self.cfg.get("matchmaker_time", 30)
+        t_limit = time_limit if time_limit is not None else self.cfg.get("matchmaker_time", 10)
         tc_key = "classical" if t_limit > 8 else "blitz" if t_limit > 3 else "bullet"
         try:
             preferred: list[dict] = []
